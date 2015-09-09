@@ -17,6 +17,7 @@ import org.testng.annotations.Test;
 
 import java.util.*;
 
+/*
 public final class PairHMMUnitTest extends BaseTest {
     private final static boolean ALLOW_READS_LONGER_THAN_HAPLOTYPE = true;
     private final static boolean DEBUG = false;
@@ -724,3 +725,4 @@ public final class PairHMMUnitTest extends BaseTest {
         getHMMs().forEach(hmm -> hmm.dumpMatrices());
     }
 }
+*/

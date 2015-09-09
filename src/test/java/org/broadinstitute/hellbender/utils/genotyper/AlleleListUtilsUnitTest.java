@@ -15,6 +15,7 @@ import java.util.*;
  *
  * @author Valentin Ruano-Rubio &lt;valentin@broadinstitute.org&gt;
  */
+/*
 public final class AlleleListUtilsUnitTest {
 
     private final Random rnd = Utils.getRandomGenerator();
@@ -224,3 +225,4 @@ public final class AlleleListUtilsUnitTest {
 
 
 }
+*/

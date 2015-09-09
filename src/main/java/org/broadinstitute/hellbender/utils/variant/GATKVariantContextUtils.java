@@ -2,18 +2,27 @@ package org.broadinstitute.hellbender.utils.variant;
 
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.TribbleException;
+import htsjdk.tribble.readers.LineIterator;
+import htsjdk.tribble.readers.PositionalBufferedStream;
 import htsjdk.variant.variantcontext.*;
+import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFConstants;
+import htsjdk.variant.vcf.VCFHeader;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.tuple.MutablePair;
+import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+//import org.broadinstitute.hellbender.utils.collections.Pair;
 import org.broadinstitute.hellbender.utils.Utils;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -21,6 +30,8 @@ import java.util.stream.Collectors;
 public final class GATKVariantContextUtils {
 
     private static final Logger logger = LogManager.getLogger(GATKVariantContextUtils.class);
+
+    public static final int DEFAULT_PLOIDY = HomoSapiensConstants.DEFAULT_PLOIDY;
 
     public static final String MERGE_FILTER_PREFIX = "filterIn";
     public static final String MERGE_REF_IN_ALL = "ReferenceInAll";
@@ -1213,4 +1224,35 @@ public final class GATKVariantContextUtils {
 
         return -1;
     }
+
+    /**
+     * Read all of the VCF records from source into memory, returning the header and the VariantContexts
+     *
+     * SHOULD ONLY BE USED FOR UNIT/INTEGRATION TESTING PURPOSES!
+     *
+     * @param source the file to read, must be in VCF4 format
+     * @return
+     * @throws java.io.IOException
+     */
+    public static Pair<VCFHeader, List<VariantContext>> readVCF(final File source) throws IOException {
+        // read in the features
+        final List<VariantContext> vcs = new ArrayList<VariantContext>();
+        final VCFCodec codec = new VCFCodec();
+        PositionalBufferedStream pbs = new PositionalBufferedStream(new FileInputStream(source));
+        final LineIterator vcfSource = codec.makeSourceFromStream(pbs);
+        try {
+            final VCFHeader vcfHeader = (VCFHeader) codec.readActualHeader(vcfSource);
+
+            while (vcfSource.hasNext()) {
+                final VariantContext vc = codec.decode(vcfSource);
+                if ( vc != null )
+                    vcs.add(vc);
+            }
+
+            return new ImmutablePair<VCFHeader, List<VariantContext>>(vcfHeader, vcs);
+        } finally {
+            codec.close(vcfSource);
+        }
+    }
+
 }

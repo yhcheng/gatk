@@ -93,6 +93,7 @@ dependencies {
         exclude module: 'guava-jdk5'
         exclude group:  'guava-jdk5'
     }
+    compile 'it.unimi.dsi:fastutil:7.0.6'
     compile ('com.google.cloud.genomics:gatk-tools-java:1.1') {
         exclude module: 'guava-jdk5'
     }
