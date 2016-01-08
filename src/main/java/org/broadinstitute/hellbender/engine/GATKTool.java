@@ -6,7 +6,6 @@ import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.ValidationStringency;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
-import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.hellbender.cmdline.Argument;
 import org.broadinstitute.hellbender.cmdline.ArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
@@ -19,7 +18,7 @@ import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 
 import java.io.File;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -312,16 +311,7 @@ public abstract class GATKTool extends CommandLineProgram {
     private void validateSequenceDictionaries() {
         final SAMSequenceDictionary refDict = hasReference() ? reference.getSequenceDictionary() : null;
         final SAMSequenceDictionary readDict = hasReads() ? reads.getSequenceDictionary() : null;
-        List<SAMSequenceDictionary> variantDicts = new ArrayList<>();
-        if (hasFeatures()){
-            List<VCFHeader> variantHeaders = features.getAllVariantHeaders();
-            for (VCFHeader header : variantHeaders) {
-                SAMSequenceDictionary headerDict = header.getSequenceDictionary();
-                if (headerDict != null) {
-                    variantDicts.add(headerDict);
-                }
-            }
-        }
+        final List<SAMSequenceDictionary> variantDicts = hasFeatures() ? features.getAllSequenceDictionaries() : Collections.emptyList();
 
         // Check the reference dictionary against the reads dictionary
         if ( hasReference() && hasReads() ) {
@@ -337,7 +327,7 @@ public abstract class GATKTool extends CommandLineProgram {
 
         // Check all variants dictionaries against the reference and/or reads dictionaries
         // TODO: pass file names associated with each sequence dictionary into validateDictionaries(); issue #660
-        for ( SAMSequenceDictionary variantsDict : variantDicts ) {
+        for ( final SAMSequenceDictionary variantsDict : variantDicts ) {
             if (hasReference()){
                 SequenceDictionaryUtils.validateDictionaries("reference", refDict, "variants", variantsDict);
             }

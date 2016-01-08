@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.engine;
 
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
 import htsjdk.variant.vcf.VCFHeader;
@@ -227,6 +228,15 @@ public final class FeatureManager implements AutoCloseable {
             }
         }
         return headers;
+    }
+
+    /**
+     * Returns the sequence dictionaries associated with the given set of feature sources.
+     */
+    public List<SAMSequenceDictionary> getAllSequenceDictionaries() {
+        return featureSources.values().stream().map(fs -> fs.getSequenceDictionary())
+                .filter(dict -> dict != null)
+                .collect(Collectors.toList());
     }
 
     /**

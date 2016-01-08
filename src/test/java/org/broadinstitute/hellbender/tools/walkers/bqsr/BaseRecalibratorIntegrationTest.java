@@ -82,7 +82,7 @@ public final class BaseRecalibratorIntegrationTest extends CommandLineProgramTes
 
                 {new BQSRTest(hg18Reference, HiSeqCram_chr17, dbSNPb37_chr17, "", getResourceDir() + "expected.NA12878.chr17_69k_70k.txt")},
                 {new BQSRTest(hg18Reference, HiSeqBam_chr17, dbSNPb37_chr17, "", getResourceDir() + "expected.NA12878.chr17_69k_70k.txt")},
-                {new BQSRTest(GRCh37Ref_chr2021, trickyBam_chr20, dbSNPb37_chr17, "", getResourceDir() + "expected.CEUTrio.HiSeq.WGS.b37.ch20.4379150-4379157.recal.txt")},
+                {new BQSRTest(GRCh37Ref_chr2021, trickyBam_chr20, dbSNPb37_chr20, "", getResourceDir() + "expected.CEUTrio.HiSeq.WGS.b37.ch20.4379150-4379157.recal.txt")},
                 {new BQSRTest(hg18Reference, HiSeqBam_chr17, dbSNPb37_chr17, "-knownSites " + moreSites, getResourceDir() + "expected.NA12878.chr17_69k_70k.2inputs.txt")},
                 {new BQSRTest(hg18Reference, HiSeqBam_chr17, dbSNPb37_chr17, "--indels_context_size 4", getResourceDir() + "expected.NA12878.chr17_69k_70k.indels_context_size4.txt")},
                 {new BQSRTest(hg18Reference, HiSeqBam_chr17, dbSNPb37_chr17, "--low_quality_tail 5", getResourceDir() + "expected.NA12878.chr17_69k_70k.low_quality_tail5.txt")},
@@ -158,4 +158,21 @@ public final class BaseRecalibratorIntegrationTest extends CommandLineProgramTes
                 UserException.IncompatibleSequenceDictionaries.class);
         spec.executeTest("testBQSRFailWithIncompatibleReference", this);
     }
+
+    @Test
+    public void testBQSRFailWithIncompatibleSequenceDictionaries() throws IOException {
+        final String resourceDir =  getTestDataDir() + "/" + "BQSR" + "/";
+
+        final String bam_chr20 = resourceDir + WGS_B37_CH20_1M_1M1K_BAM;
+        final String dbSNPb37_chr17 =  getResourceDir() + "dbsnp_132.b37.excluding_sites_after_129.chr17_69k_70k.vcf";
+
+        final String  NO_ARGS = "";
+        final BQSRTest params = new BQSRTest(b37_reference_20_21, bam_chr20, dbSNPb37_chr17, NO_ARGS, resourceDir + "expected.txt");
+        IntegrationTestSpec spec = new IntegrationTestSpec(
+                params.getCommandLine(),
+                1,
+                UserException.IncompatibleSequenceDictionaries.class);
+        spec.executeTest("testBQSRFailWithIncompatibleReference", this);
+    }
+
 }
