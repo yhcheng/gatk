@@ -1,10 +1,7 @@
 package org.broadinstitute.hellbender.engine;
 
-import htsjdk.samtools.SAMFormatException;
-import htsjdk.samtools.SAMFileHeader;
-import htsjdk.samtools.SamReader;
-import htsjdk.samtools.SamReaderFactory;
-import htsjdk.samtools.ValidationStringency;
+import htsjdk.samtools.*;
+import htsjdk.samtools.reference.IndexedFastaSequenceFile;
 import htsjdk.tribble.Feature;
 import htsjdk.variant.vcf.VCFFileReader;
 import htsjdk.variant.vcf.VCFHeader;
@@ -13,6 +10,7 @@ import org.broadinstitute.hellbender.cmdline.CommandLineParser;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -87,6 +85,19 @@ public final class GATKToolUnitTest extends BaseTest{
         public int getCount() { return count; }
     }
 
+    @CommandLineProgramProperties(
+            summary = "TestGATKToolWithNothing",
+            oneLineSummary = "TestGATKToolWithNothing",
+            programGroup = ReadProgramGroup.class
+    )
+    private static final class TestGATKToolWithNothing extends GATKTool{
+
+        @Override
+        public void traverse() {
+            //no op
+        }
+    }
+
     @Test
     public void testReadsHeader() throws Exception {
         final GATKTool tool = new TestGATKToolWithReads();
@@ -134,11 +145,10 @@ public final class GATKToolUnitTest extends BaseTest{
 
     @Test
     public void testAllowLexicographicallySortedVariantHeader() throws Exception {
-        final TestGATKToolWithFeatures tool = new TestGATKToolWithFeatures();
+        final GATKTool tool = new TestGATKToolWithFeatures();
         final CommandLineParser clp = new CommandLineParser(tool);
         final File vcfFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/lexicographically_sorted_dict.vcf");
-        final String[] args = {"--mask", vcfFile.getCanonicalPath(),
-                               "--reference", b37_reference_20_21};
+        final String[] args = {"--mask", vcfFile.getCanonicalPath() };
         clp.parseArguments(System.out, args);
 
         // This method would throw if sequence dictionary validation failed. Here we are testing
@@ -191,4 +201,82 @@ public final class GATKToolUnitTest extends BaseTest{
         testValidationStringency(bamFileName, referenceFileName, "SILENT", count);
     }
 
+    @Test(expectedExceptions = UserException.IncompatibleSequenceDictionaries.class)
+    public void testDisallowLexicographicallySortedVariantHeader_ifClashWithReference() throws Exception {
+        final GATKTool tool = new TestGATKToolWithFeatures();
+        final CommandLineParser clp = new CommandLineParser(tool);
+        final File vcfFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/lexicographically_sorted_dict.vcf");
+        final String[] args = {"--mask", vcfFile.getCanonicalPath(),
+                               "--reference", hg19MiniReference};
+        clp.parseArguments(System.out, args);
+
+        // This method throws despite the lexicographically-sorted sequence dictionary in the vcf.
+        //This is because the reference sequence dictionary clashes with the one from the VCF.
+        tool.onStartup();
+    }
+
+    @Test
+    public void testBestSequenceDictionary_fromReads() throws Exception {
+        final GATKTool tool = new TestGATKToolWithReads();
+        final CommandLineParser clp = new CommandLineParser(tool);
+        final File bamFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/reads_data_source_test1.bam");
+        final String[] args = {"-I", bamFile.getCanonicalPath()};
+        clp.parseArguments(System.out, args);
+        tool.onStartup();
+        //read the dict back in and compare to bam dict
+        final SAMSequenceDictionary toolDict = tool.getBestAvailableSequenceDictionary();
+        final SamReader open = SamReaderFactory.makeDefault().open(bamFile);
+        final SAMSequenceDictionary bamDict = open.getFileHeader().getSequenceDictionary();
+        toolDict.assertSameDictionary(bamDict);
+        bamDict.assertSameDictionary(toolDict);
+        Assert.assertEquals(toolDict, bamDict);
+    }
+
+    @Test
+    public void testBestSequenceDictionary_fromReadsAndReference() throws Exception {
+        final GATKTool tool = new TestGATKToolWithReads();
+        final CommandLineParser clp = new CommandLineParser(tool);
+        final File bamFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/reads_data_source_test1.bam");
+        final String fastaFile =   hg19MiniReference;
+        final String[] args = {"-I", bamFile.getCanonicalPath(),
+        "-R", fastaFile};
+        clp.parseArguments(System.out, args);
+        tool.onStartup();
+        //read the dict back in and compare to bam dict
+        final SAMSequenceDictionary toolDict = tool.getBestAvailableSequenceDictionary();
+        final SAMSequenceDictionary fastaDict = new IndexedFastaSequenceFile(new File(fastaFile)).getSequenceDictionary();
+        toolDict.assertSameDictionary(fastaDict);
+        fastaDict.assertSameDictionary(toolDict);
+
+        Assert.assertEquals(toolDict, fastaDict);
+    }
+
+
+    @Test
+    public void testBestSequenceDictionary_fromVariants() throws Exception {
+        final GATKTool tool = new TestGATKToolWithFeatures();
+        final CommandLineParser clp = new CommandLineParser(tool);
+        final File vcfFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/feature_data_source_test_withSequenceDict.vcf");
+        final String[] args = {"--mask", vcfFile.getCanonicalPath()};
+        clp.parseArguments(System.out, args);
+        tool.onStartup();
+        //read the dict back in and compare to bam dict
+        final SAMSequenceDictionary toolDict = tool.getBestAvailableSequenceDictionary();
+        final SAMSequenceDictionary vcfDict = new VCFFileReader(vcfFile).getFileHeader().getSequenceDictionary();
+        toolDict.assertSameDictionary(vcfDict);
+        vcfDict.assertSameDictionary(toolDict);
+        Assert.assertEquals(toolDict, vcfDict);
+    }
+
+    @Test
+    public void testBestSequenceDictionary_fromNothing() throws Exception {
+        final GATKTool tool = new TestGATKToolWithNothing();
+        final CommandLineParser clp = new CommandLineParser(tool);
+        final String[] args = {};
+        clp.parseArguments(System.out, args);
+        tool.onStartup();
+        //read the dict back in and compare to bam dict
+        final SAMSequenceDictionary toolDict = tool.getBestAvailableSequenceDictionary();
+        Assert.assertNull(toolDict);
+    }
 }

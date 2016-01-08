@@ -55,6 +55,15 @@ public abstract class VariantWalker extends GATKTool {
         initializeDrivingVariants();
     }
 
+    @Override
+    public void onStartup() {
+        super.onStartup();
+        if ( hasIntervals() ) {
+            drivingVariants.setIntervalsForTraversal(intervalsForTraversal);
+        }
+    }
+
+
     @SuppressWarnings("unchecked")
     private void initializeDrivingVariants() {
         // Need to discover the right codec for the driving source of variants manually, since we are
@@ -69,9 +78,7 @@ public abstract class VariantWalker extends GATKTool {
         drivingVariantsFeatureInput = new FeatureInput<>("drivingVariantFile", Collections.emptyMap(), drivingVariantFile);
         features.addToFeatureSources(0, drivingVariantsFeatureInput, VariantContext.class);
 
-        if ( hasIntervals() ) {
-            drivingVariants.setIntervalsForTraversal(intervalsForTraversal);
-        }
+        //Note: the intervals for the driving variants are set in onStartup
     }
 
     /**

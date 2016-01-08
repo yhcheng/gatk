@@ -6,7 +6,6 @@ import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
-import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.hellbender.cmdline.Argument;
 import org.broadinstitute.hellbender.cmdline.ArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
@@ -19,7 +18,7 @@ import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 
 import java.io.File;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -163,7 +162,7 @@ public abstract class GATKTool extends CommandLineProgram {
         if ( intervalArgumentCollection.intervalsSpecified() ) {
             final SAMSequenceDictionary sequenceDictionary = getBestAvailableSequenceDictionary();
             if ( sequenceDictionary == null ) {
-                throw new UserException("We currently require a sequence dictionary (from a reference or source of reads) " +
+                throw new UserException("We currently require a sequence dictionary (from a reference, a source of reads, or a source of variants) " +
                                         "to process intervals. This restriction may be removed in the future.");
             }
 
@@ -253,15 +252,29 @@ public abstract class GATKTool extends CommandLineProgram {
 
     /**
      * Returns the "best available" sequence dictionary. This will be the reference sequence dictionary if
-     * there is a reference, otherwise it will be the sequence dictionary constructed from the reads if
-     * there are reads, otherwise it will be null.
+     * there is a reference.
+     * Otherwise, if there are reads, it will be the sequence dictionary constructed from the reads.
+     * Otherwise, if there are features, it will be the first of the sequence dictionaries constructed from
+     * the VCF headers of variant Feature inputs.
+     * Otherwise, the result will be null.
      *
      * TODO: check interval file(s) as well for a sequence dictionary
      *
      * @return best available sequence dictionary given our inputs
      */
-    public final SAMSequenceDictionary getBestAvailableSequenceDictionary() {
-        return reference != null ? reference.getSequenceDictionary() : (reads != null ? reads.getSequenceDictionary() : null);
+    public SAMSequenceDictionary getBestAvailableSequenceDictionary() {
+        if (hasReference()){
+            return reference.getSequenceDictionary();
+        } else if (hasReads()){
+            return reads.getSequenceDictionary();
+        } else if (hasFeatures()){
+            final List<SAMSequenceDictionary> dictionaries = features.getVariantSequenceDictionaries();
+            //If there is just one, it clearly is the best. Otherwise, noone is best.
+            if (dictionaries.size() == 1){
+                return dictionaries.get(0);
+            }
+        }
+        return null;
     }
 
     /**
@@ -308,9 +321,9 @@ public abstract class GATKTool extends CommandLineProgram {
 
         initializeReads(); // Must be initialized after reference, in case we are dealing with CRAM and a reference is required
 
-        initializeIntervals(); // Must be initialized after reference and reads, since intervals currently require a sequence dictionary from another data source
-
         initializeFeatures();
+
+        initializeIntervals(); // Must be initialized after reference, reads and features, since intervals currently require a sequence dictionary from another data source
 
         if ( ! disableSequenceDictionaryValidation ) {
             validateSequenceDictionaries();
@@ -336,16 +349,7 @@ public abstract class GATKTool extends CommandLineProgram {
     private void validateSequenceDictionaries() {
         final SAMSequenceDictionary refDict = hasReference() ? reference.getSequenceDictionary() : null;
         final SAMSequenceDictionary readDict = hasReads() ? reads.getSequenceDictionary() : null;
-        List<SAMSequenceDictionary> variantDicts = new ArrayList<>();
-        if (hasFeatures()){
-            List<VCFHeader> variantHeaders = features.getAllVariantHeaders();
-            for (VCFHeader header : variantHeaders) {
-                SAMSequenceDictionary headerDict = header.getSequenceDictionary();
-                if (headerDict != null) {
-                    variantDicts.add(headerDict);
-                }
-            }
-        }
+        final List<SAMSequenceDictionary> variantDicts = hasFeatures() ? features.getVariantSequenceDictionaries() : Collections.emptyList();
 
         // Check the reference dictionary against the reads dictionary
         if ( hasReference() && hasReads() ) {
