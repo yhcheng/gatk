@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.engine;
 
+import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
@@ -27,7 +28,9 @@ public abstract class VariantWalker extends GATKTool {
 
     // NOTE: using File rather than FeatureInput<VariantContext> here so that we can keep this driving source
     //       of variants separate from any other potential sources of Features
-    @Argument(fullName = StandardArgumentDefinitions.VARIANT_LONG_NAME, shortName = StandardArgumentDefinitions.VARIANT_SHORT_NAME, doc = "A VCF file containing variants", common = false, optional = false)
+    @Argument(fullName = StandardArgumentDefinitions.VARIANT_LONG_NAME,
+            shortName = StandardArgumentDefinitions.VARIANT_SHORT_NAME,
+            doc = "A VCF file containing variants", common = false, optional = false)
     public File drivingVariantFile;
 
     /**
@@ -115,6 +118,15 @@ public abstract class VariantWalker extends GATKTool {
         }
 
         return (VCFHeader)header;
+    }
+
+    // TODO this is temporary - needs to be resolved with Adams's changes in
+    // TODO restore the final keyword to GATKTool.getBestAvailableSequenceDictionary when this is resolved
+    // https://github.com/broadinstitute/gatk/pull/1424
+    @Override
+    public SAMSequenceDictionary getBestAvailableSequenceDictionary() {
+        SAMSequenceDictionary sequenceDictionary = super.getBestAvailableSequenceDictionary();
+        return sequenceDictionary == null ? getHeaderForVariants().getSequenceDictionary() : sequenceDictionary;
     }
 
     /**

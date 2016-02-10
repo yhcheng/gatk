@@ -1533,11 +1533,13 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
     @Test
     public void testCreateVariantContextWriterNoOptions() {
         final File outFile = createTempFile("testVCFWriter", ".vcf");
-        final VariantContextWriter vcw = GATKVariantContextUtils.createVCFWriter(outFile, null, true);
+        final VariantContextWriter vcw = GATKVariantContextUtils.createVCFWriter(outFile, null, false);
         vcw.close();
         final File outFileIndex = new File(outFile.getAbsolutePath() + ".idx");
+        final File outFileMD5 = new File(outFile.getAbsolutePath() + ".md5");
         Assert.assertTrue(outFile.exists());
         Assert.assertFalse(outFileIndex.exists());
+        Assert.assertFalse(outFileMD5.exists());
     }
 
     @Test
@@ -1548,12 +1550,14 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
         vcw.close();
         Assert.assertTrue(outFile.exists());
         final File outFileIndex = new File(outFile.getAbsolutePath() + ".idx");
+        final File outFileMD5 = new File(outFile.getAbsolutePath() + ".md5");
         Assert.assertTrue(outFile.exists());
         Assert.assertTrue(outFileIndex.exists());
+        Assert.assertTrue(outFileMD5.exists());
     }
 
     @Test(expectedExceptions=IllegalArgumentException.class)
-    public void testNegativeCreateVariantContextWriter() {
+    public void testCreateVariantContextWriterNegative() {
         // should throw due to lack of reference
         final File outFile = createTempFile("testVCFWriter", ".vcf");
         final VariantContextWriter vcw = GATKVariantContextUtils.createVCFWriter(outFile, null, true, Options.INDEX_ON_THE_FLY);

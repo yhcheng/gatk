@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.utils.variant;
 
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.TribbleException;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.CommonInfo;
@@ -56,38 +57,58 @@ public final class GATKVariantContextUtils {
     public static final double SUM_GL_THRESH_NOCALL = -0.1; // if sum(gl) is bigger than this threshold, we treat GL's as non-informative and will force a no-call.
 
     /**
-     * Creates a VariantContextWriter who's outputFile type is <code>VariantContextWriterBuilder.OutputType.VCF</code>.
+     * Creates a VariantContextWriter who's outputFile type is based on the extension of the output file name.
      * The default options set by VariantContextWriter are cleared before applying ALLOW_MISSING_FIELDS_IN_HEADER (if
      * <code>lenientProcessing</code> is set), followed by the set of options specified by any <code>options</code> args.
      *
      * @param outFile output File for this writer
      * @param referenceDictionary required if on the fly indexing is set, otherwise can be null
-     * @param lenientProcessing true if ALLOW_MISSING_FIELDS_IN_HEADER option should be set
+     * @param createMD5 true if an md5 file should be created
      * @param options variable length list of additional options to be set for this writer
      * @returns VariantContextWriter must be closed by the caller
      */
     public static VariantContextWriter createVCFWriter(
             final File outFile,
             final SAMSequenceDictionary referenceDictionary,
-            final boolean lenientProcessing,
+            final boolean createMD5,
             final Options... options)
     {
-        VariantContextWriterBuilder vcWriterBuilder = new VariantContextWriterBuilder()
-                                                            .clearOptions()
-                                                            .setOutputFile(outFile)
-                                                            .setOutputFileType(VariantContextWriterBuilder.OutputType.VCF);
+        VariantContextWriterBuilder vcWriterBuilder = new VariantContextWriterBuilder().clearOptions().setOutputFile(outFile);
+
+        if (VariantContextWriterBuilder.OutputType.UNSPECIFIED == getVariantFileTypeFromExtension(outFile.getName())) {
+            // the only way the user has to specify an output type is by file extension, and htsjdk throws if it
+            // can't map the file extension to a known vcf type, so fallback to a default of VCF
+            vcWriterBuilder = vcWriterBuilder.setOutputFileType(VariantContextWriterBuilder.OutputType.VCF);
+        }
+
+        if (createMD5) {
+            vcWriterBuilder.setCreateMD5();
+        }
 
         if (null != referenceDictionary) {
             vcWriterBuilder = vcWriterBuilder.setReferenceDictionary(referenceDictionary);
         }
-        if (lenientProcessing) {
-            vcWriterBuilder = vcWriterBuilder.setOption(Options.ALLOW_MISSING_FIELDS_IN_HEADER);
-        }
+
         for (Options opt : options) {
             vcWriterBuilder = vcWriterBuilder.setOption(opt);
         }
 
         return vcWriterBuilder.build();
+    }
+
+    // TODO: this should really be exposed in htsjdk
+    private static VariantContextWriterBuilder.OutputType getVariantFileTypeFromExtension(final String fileName) {
+        VariantContextWriterBuilder.OutputType fileType = VariantContextWriterBuilder.OutputType.UNSPECIFIED;
+        if (fileName.endsWith(".vcf")) {
+            fileType = VariantContextWriterBuilder.OutputType.VCF;
+        }
+        else if (fileName.endsWith(".bcf")) {
+            fileType = VariantContextWriterBuilder.OutputType.BCF;
+        }
+        else if (AbstractFeatureReader.hasBlockCompressedExtension(fileName)) {
+            fileType = VariantContextWriterBuilder.OutputType.BLOCK_COMPRESSED_VCF;
+        }
+        return fileType;
     }
 
     /**

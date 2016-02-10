@@ -392,11 +392,6 @@ public final class SelectVariants extends VariantWalker {
     @Argument(fullName="setFilteredGtToNocall", optional=true, doc="Set filtered genotypes to no-call")
     private boolean setFilteredGenotypesToNocall = false;
 
-    @Argument(fullName=StandardArgumentDefinitions.LENIENT_LONG_NAME,
-                            shortName = StandardArgumentDefinitions.LENIENT_SHORT_NAME,
-                            doc = "Lenient processing of VCF files", common = true, optional = true)
-    private boolean lenientVCFProcessing;
-
     @HiddenOption
     @Argument(fullName="ALLOW_NONOVERLAPPING_COMMAND_LINE_SAMPLES", optional=true,
                     doc="Allow samples other than those in the VCF to be specified on the command line. These samples will be ignored.")
@@ -487,24 +482,16 @@ public final class SelectVariants extends VariantWalker {
         IDsToKeep = getIDsFromFile(rsIDFile);
         IDsToRemove = getIDsFromFile(XLrsIDFile);
 
-        Set<VCFHeaderLine> actualLines = null;
-        SAMSequenceDictionary sequenceDictionary = null;
-        if (hasReference()) {
-            File refFile = referenceArguments.getReferenceFile();
-            sequenceDictionary= this.getReferenceDictionary();
-            actualLines = withUpdatedContigsAsLines(headerLines, refFile, sequenceDictionary, suppressReferencePath);
-        }
-        else {
-            sequenceDictionary = getHeaderForVariants().getSequenceDictionary();
-            if (null != sequenceDictionary) {
-                actualLines = withUpdatedContigsAsLines(headerLines, null, sequenceDictionary, suppressReferencePath);
-            }
-            else {
-                actualLines = headerLines;
-            }
-        }
+        SAMSequenceDictionary sequenceDictionary = getBestAvailableSequenceDictionary();
+        Set<VCFHeaderLine> actualLines = actualLines = null != sequenceDictionary ?
+                        withUpdatedContigsAsLines(
+                                headerLines,
+                                hasReference() ? referenceArguments.getReferenceFile() : null,
+                                sequenceDictionary,
+                                suppressReferencePath) :
+                        headerLines;
 
-        vcfWriter = GATKVariantContextUtils.createVCFWriter(outFile, sequenceDictionary, lenientVCFProcessing);
+        vcfWriter = createVCFWriter(outFile);
         vcfWriter.writeHeader(new VCFHeader(actualLines, samples));
     }
 

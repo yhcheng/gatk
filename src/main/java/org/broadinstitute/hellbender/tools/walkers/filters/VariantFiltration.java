@@ -16,6 +16,7 @@ import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 
+import java.io.File;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -71,7 +72,7 @@ public final class VariantFiltration extends VariantWalker {
     public FeatureInput<Feature> mask;
 
     @Argument(doc="File to which variants should be written", fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, optional = false)
-    public String out = null;
+    public File out = null;
 
     /**
      * VariantFiltration accepts any number of JEXL expressions (so you can have two named filters by using
@@ -199,8 +200,7 @@ public final class VariantFiltration extends VariantWalker {
     }
 
     private void initializeVcfWriter() {
-        //TODO remove hardwiring to output VCFs
-        writer = new VariantContextWriterBuilder().setOutputFile(out).setOutputFileType(VariantContextWriterBuilder.OutputType.VCF).unsetOption(Options.INDEX_ON_THE_FLY).build();
+        writer = createVCFWriter(out);
 
         // setup the header fields
         final Set<VCFHeaderLine> hInfo = new HashSet<>();

@@ -4,8 +4,10 @@ import htsjdk.samtools.SAMFormatException;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.ValidationStringency;
 import htsjdk.tribble.Feature;
+import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFFileReader;
 import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.hellbender.cmdline.Argument;
@@ -20,6 +22,7 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.util.Iterator;
+import java.io.IOException;
 
 public final class GATKToolUnitTest extends BaseTest{
 
@@ -85,6 +88,31 @@ public final class GATKToolUnitTest extends BaseTest{
         }
 
         public int getCount() { return count; }
+    }
+    @CommandLineProgramProperties(
+            summary = "TestGATKToolWithVariants",
+            oneLineSummary = "TestGATKToolWithVariants",
+            programGroup = ReadProgramGroup.class
+    )
+    private static final class TestGATKToolWithVariants extends GATKTool{
+
+        @Argument(fullName="out", shortName="out", doc="Input variants", optional=true)
+        public File out;
+
+        @Override
+        public SAMSequenceDictionary getBestAvailableSequenceDictionary() {
+            return new SAMSequenceDictionary();
+        }
+
+        @Override
+        public boolean requiresFeatures() {
+            return true;
+        }
+
+        @Override
+        public void traverse() {
+            //no op
+        }
     }
 
     @Test
@@ -189,6 +217,77 @@ public final class GATKToolUnitTest extends BaseTest{
     @Test(dataProvider = "validationStringency")
     public void testReadsValidationStringencySilent(final String bamFileName, final String referenceFileName, int count) throws Exception {
         testValidationStringency(bamFileName, referenceFileName, "SILENT", count);
+    }
+
+
+    private TestGATKToolWithVariants createTestVariantTool(final String args[]) {
+        final TestGATKToolWithVariants tool = new TestGATKToolWithVariants();
+        if (null != args) {
+            final CommandLineParser clp = new CommandLineParser(tool);
+            clp.parseArguments(System.out, args);
+        }
+        return tool;
+    }
+
+    @Test
+    public void testCreateVCFWriterDefaults() throws IOException {
+        final TestGATKToolWithVariants tool = createTestVariantTool(null);
+
+        final File outFile = createTempFile("createVCFTest", ".vcf");
+        VariantContextWriter writer = tool.createVCFWriter(outFile);
+        writer.close();
+
+        final File outFileIndex = new File(outFile.getAbsolutePath() + ".idx");
+        final File outFileMD5 = new File(outFile.getAbsolutePath() + ".md5");
+
+        Assert.assertTrue(outFile.exists());
+        Assert.assertTrue(outFileIndex.exists());
+        Assert.assertFalse(outFileMD5.exists());
+    }
+
+    @Test
+    public void testCreateVCFWriterNoIndexWithMD5() throws IOException {
+        final File inputFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/example_variants.vcf");
+        final File outputFile = createTempFile("createVCFTest", ".vcf");
+
+        final String[] args = {"--input", inputFile.getCanonicalPath(),
+                                "--out", outputFile.getCanonicalPath(),
+                                "--createOutputVariantIndex", "false",
+                                "--createOutputVariantMD5"};
+
+        final TestGATKToolWithVariants tool = createTestVariantTool(args);
+        VariantContextWriter writer = tool.createVCFWriter(outputFile);
+        writer.close();
+
+        final File outFileIndex = new File(outputFile.getAbsolutePath() + ".idx");
+        final File outFileMD5 = new File(outputFile.getAbsolutePath() + ".md5");
+
+        Assert.assertTrue(outputFile.exists());
+        Assert.assertFalse(outFileIndex.exists());
+        Assert.assertTrue(outFileMD5.exists());
+    }
+
+    @Test
+    public void testCreateVCFWriterOptions() throws IOException {
+        final File inputFile = new File(publicTestDir + "org/broadinstitute/hellbender/engine/example_variants.vcf");
+        final File outputFile = createTempFile("createVCFTest", ".vcf");
+
+        final String[] args = {"--input", inputFile.getCanonicalPath(),
+                "--out", outputFile.getCanonicalPath(),
+                "--createOutputVariantIndex", "false",
+                "--createOutputVariantMD5",
+                "--lenient"};
+
+        final TestGATKToolWithVariants tool = createTestVariantTool(args);
+        VariantContextWriter writer = tool.createVCFWriter(outputFile);
+        writer.close();
+
+        final File outFileIndex = new File(outputFile.getAbsolutePath() + ".idx");
+        final File outFileMD5 = new File(outputFile.getAbsolutePath() + ".md5");
+
+        Assert.assertTrue(outputFile.exists());
+        Assert.assertFalse(outFileIndex.exists());
+        Assert.assertTrue(outFileMD5.exists());
     }
 
 }
