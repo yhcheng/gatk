@@ -862,4 +862,19 @@ public final class Utils {
             logger.warn("This tool has only been well tested on ILLUMINA-based sequencing data. For other data use at your own risk.");
         }
     }
+
+    /**
+     * Simple wrapper for sticking elements of a int[] array into a List<Integer>
+     * @param ar - the array whose elements should be listified
+     * @return - a List<Integer> where each element has the same value as the corresponding index in @ar
+     */
+    public static List<Integer> listFromPrimitives(final int[] ar) {
+        Utils.nonNull(ar);
+        final List<Integer> lst = new ArrayList<>(ar.length);
+        for ( final int d : ar ) {
+            lst.add(d);
+        }
+
+        return lst;
+    }
 }

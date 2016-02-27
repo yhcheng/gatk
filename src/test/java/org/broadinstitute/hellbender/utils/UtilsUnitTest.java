@@ -474,4 +474,20 @@ public final class UtilsUnitTest extends BaseTest {
                 {"romeo+juliette" , "01111010111001" },
         };
     }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testListFromPrimitivesNull() throws Exception {
+        Utils.listFromPrimitives(null);
+    }
+
+    @Test
+    public void testListFromPrimitivesEmpty() throws Exception {
+        Assert.assertTrue(Utils.listFromPrimitives(new int[0]).isEmpty());
+    }
+
+    @Test
+    public void testListFromPrimitivesNoneEmpty() throws Exception {
+        Assert.assertEquals(Utils.listFromPrimitives(new int[]{1,2}), Arrays.asList(1,2));
+    }
+
 }
