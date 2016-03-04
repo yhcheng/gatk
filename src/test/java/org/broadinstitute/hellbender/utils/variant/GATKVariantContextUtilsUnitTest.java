@@ -1094,7 +1094,7 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
     //
     // --------------------------------------------------------------------------------
 
-    @DataProvider(name = "subsetDiploidAllelesData")
+    @DataProvider(name = "SubsetDiploidAllelesData")
     public Object[][] makesubsetDiploidAllelesData() {
         List<Object[]> tests = new ArrayList<>();
 
@@ -1111,6 +1111,11 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
 
         final VariantContext vcBase = new VariantContextBuilder("test", "20", 10, 10, AC).make();
 
+        // haploid, one alt allele
+        final double[] haploidRefPL = MathUtils.normalizeFromRealSpace(new double[]{0.9, 0.1});
+        final double[] haploidAltPL = MathUtils.normalizeFromRealSpace(new double[]{0.1, 0.9});
+
+        // diploid, one alt allele
         final double[] homRefPL = MathUtils.normalizeFromRealSpace(new double[]{0.9, 0.09, 0.01});
         final double[] hetPL = MathUtils.normalizeFromRealSpace(new double[]{0.09, 0.9, 0.01});
         final double[] homVarPL = MathUtils.normalizeFromRealSpace(new double[]{0.01, 0.09, 0.9});
@@ -1118,11 +1123,15 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
 
         final Genotype base = new GenotypeBuilder("NA12878").DP(10).GQ(50).make();
 
-        // make sure we don't screw up the simple case
+        // the simple case where no selection occurs
+        final Genotype aHaploidGT = new GenotypeBuilder(base).alleles(AA).AD(new int[]{10,2}).PL(haploidRefPL).GQ(8).make();
+        final Genotype cHaploidGT = new GenotypeBuilder(base).alleles(AC).AD(new int[]{10,2}).PL(haploidAltPL).GQ(8).make();
         final Genotype aaGT = new GenotypeBuilder(base).alleles(AA).AD(new int[]{10,2}).PL(homRefPL).GQ(8).make();
         final Genotype acGT = new GenotypeBuilder(base).alleles(AC).AD(new int[]{10,2}).PL(hetPL).GQ(8).make();
         final Genotype ccGT = new GenotypeBuilder(base).alleles(CC).AD(new int[]{10,2}).PL(homVarPL).GQ(8).make();
 
+        tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(aHaploidGT).make(), AC, Arrays.asList(new GenotypeBuilder(aHaploidGT).make())});
+        tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(cHaploidGT).make(), AC, Arrays.asList(new GenotypeBuilder(cHaploidGT).make())});
         tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(aaGT).make(), AC, Arrays.asList(new GenotypeBuilder(aaGT).make())});
         tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(acGT).make(), AC, Arrays.asList(new GenotypeBuilder(acGT).make())});
         tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(ccGT).make(), AC, Arrays.asList(new GenotypeBuilder(ccGT).make())});
@@ -1132,13 +1141,14 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
         final Genotype emptyGT = new GenotypeBuilder(base).alleles(GATKVariantContextUtils.noCallAlleles(2)).noPL().noGQ().make();
         tests.add(new Object[]{new VariantContextBuilder(vcBase).genotypes(uninformativeGT).make(), AC, Arrays.asList(emptyGT)});
 
-        // actually subsetting down from multiple alt values
+        // subsetting from 3 to 2 alleles
+        // PL order is: AA, AC, CC, AG, CG, GG
         final double[] homRef3AllelesPL = new double[]{0, -10, -20, -30, -40, -50};
         final double[] hetRefC3AllelesPL = new double[]{-10, 0, -20, -30, -40, -50};
         final double[] homC3AllelesPL = new double[]{-20, -10, 0, -30, -40, -50};
         final double[] hetRefG3AllelesPL = new double[]{-20, -10, -30, 0, -40, -50};
-        final double[] hetCG3AllelesPL = new double[]{-20, -10, -30, -40, 0, -50}; // AA, AC, CC, AG, CG, GG
-        final double[] homG3AllelesPL = new double[]{-20, -10, -30, -40, -50, 0};  // AA, AC, CC, AG, CG, GG
+        final double[] hetCG3AllelesPL = new double[]{-20, -10, -30, -40, 0, -50};
+        final double[] homG3AllelesPL = new double[]{-20, -10, -30, -40, -50, 0};
         tests.add(new Object[]{
                 new VariantContextBuilder(vcBase).alleles(ACG).genotypes(new GenotypeBuilder(base).alleles(AA).PL(homRef3AllelesPL).make()).make(),
                 AC,
@@ -1169,6 +1179,20 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
                 Arrays.asList(new GenotypeBuilder(base).alleles(GG).PL(new double[]{-20, -40, 0}).GQ(200).make())});
 
         return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "SubsetDiploidAllelesData")
+    public void testSubsetAlleles(final VariantContext inputVC,
+                                             final List<Allele> allelesToUse,
+                                             final List<Genotype> expectedGenotypes) {
+        final GenotypesContext actual = GATKVariantContextUtils.subsetAlleles(inputVC, allelesToUse, GATKVariantContextUtils.GenotypeAssignmentMethod.USE_PLS_TO_ASSIGN);
+
+        Assert.assertEquals(actual.size(), expectedGenotypes.size());
+        for ( final Genotype expected : expectedGenotypes ) {
+            final Genotype actualGT = actual.get(expected.getSampleName());
+            Assert.assertNotNull(actualGT);
+            assertGenotypesAreEqual(actualGT, expected);
+        }
     }
 
     @DataProvider(name = "UpdateGenotypeAfterSubsettingData")
@@ -1236,7 +1260,7 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
                                                   final List<Allele> expectedAlleles) {
         final GenotypeBuilder gb = new GenotypeBuilder("test");
         final double[] logLikelhoods = MathUtils.normalizeFromLog10(likelihoods, true, false);
-        GATKVariantContextUtils.updateGenotypeAfterSubsetting(originalGT, gb, mode, logLikelhoods, allelesToUse);
+        GATKVariantContextUtils.updateGenotypeAfterSubsetting(originalGT, 2, gb, mode, logLikelhoods, allelesToUse);
         final Genotype g = gb.make();
         Assert.assertEquals(new HashSet<>(g.getAlleles()), new HashSet<>(expectedAlleles));
     }
@@ -1300,7 +1324,7 @@ public final class GATKVariantContextUtilsUnitTest extends BaseTest {
 
         final Genotype base = new GenotypeBuilder("NA12878").DP(10).GQ(100).make();
 
-        // make sure we don't screw up the simple case where no selection happens
+        // the simple case where no selection occurs
         final Genotype aaGT = new GenotypeBuilder(base).alleles(AA).AD(new int[]{10,2}).PL(homRefPL).GQ(8).make();
         final Genotype acGT = new GenotypeBuilder(base).alleles(AC).AD(new int[]{10,2}).PL(hetPL).GQ(8).make();
         final Genotype ccGT = new GenotypeBuilder(base).alleles(CC).AD(new int[]{10,2}).PL(homVarPL).GQ(8).make();
