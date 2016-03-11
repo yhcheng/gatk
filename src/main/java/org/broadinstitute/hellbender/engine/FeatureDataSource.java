@@ -4,13 +4,13 @@ import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.tribble.*;
 import htsjdk.tribble.index.Index;
-import htsjdk.tribble.index.IndexFactory;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.IndexFeatureFile;
+import org.broadinstitute.hellbender.utils.IndexUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 
 import java.io.File;
@@ -392,7 +392,10 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
     }
 
     /**
-     * Returns the sequence dictionary created from the index or null if that fails.
+     * Returns the sequence dictionary for this source of Features.
+     * Uses the dictionary from the VCF header (if present) for variant inputs,
+     * otherwise attempts to create a sequence dictionary from the index file (if present).
+     * Returns null if no dictionary could be created from either the header or the index.
      */
     public SAMSequenceDictionary getSequenceDictionary() {
         SAMSequenceDictionary dict = null;
@@ -404,36 +407,11 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
     }
 
     /**
-     * Load the index from disk, checking for out of date indexes and old versions
-     * @return an Index, or null if we're unable to load
-     */
-    private Index loadIndexFromDisk() {
-        if (! hasIndex) {
-            return null;
-        }
-        final File indexFile = Tribble.indexFile(featureFile);
-        if (! indexFile.canRead()) {
-            return null;
-        }
-        logger.debug("Loading Tribble index from disk for file " + featureFile);
-        final Index index = IndexFactory.loadIndex(indexFile.getAbsolutePath());
-
-        // check if the file is up-to date (filestamp and version check)
-        if (index.isCurrentVersion() && indexFile.lastModified() >= featureFile.lastModified()) {
-            return index;
-        } else if (indexFile.lastModified() < featureFile.lastModified()) {
-            throw new UserException("Index file " + indexFile + " is out of date (index older than input file). Use IndexFeatureFile to make an index.");
-        } else { // we've loaded an old version of the index, we want to remove it <-- currently not used, but may re-enable
-            throw new UserException("Index file " + indexFile + " is out of date (old version). Use IndexFeatureFile to make an index.");
-        }
-    }
-
-    /**
      * get the sequence dictionary contig list that is always in the index
      * @return a SAMSequenceDictionary or null if the index cannot be loaded or there are no contigs in the index
      */
     private SAMSequenceDictionary createSequenceDictionaryFromContigList() {
-        final Index index = loadIndexFromDisk();
+        final Index index = hasIndex ? IndexUtils.loadTribbleIndex(featureFile) : null;
         if (index == null){
             return null;
         }

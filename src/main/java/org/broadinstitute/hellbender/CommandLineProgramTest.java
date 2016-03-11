@@ -5,7 +5,6 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.utils.logging.BunnyLog;
 import org.broadinstitute.hellbender.utils.test.BaseTest;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -14,14 +13,6 @@ import java.util.List;
  * Utility class for CommandLine Program testing.
  */
 public abstract class CommandLineProgramTest extends BaseTest {
-
-    /**
-     * Returns the location of the resource directory. The default implementation points to the common directory for tools.
-     */
-    public static File getTestDataDir(){
-        return new File("src/test/resources/org/broadinstitute/hellbender/tools/");
-    }
-
 
     /**
      * For testing support.  Given a name of a Main CommandLineProgram and it's arguments, builds the arguments appropriate for calling the

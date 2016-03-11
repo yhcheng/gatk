@@ -194,6 +194,13 @@ public abstract class BaseTest {
     }
 
     /**
+     * Returns the location of the resource directory. The default implementation points to the common directory for tools.
+     */
+    public static File getTestDataDir(){
+        return new File("src/test/resources/org/broadinstitute/hellbender/tools/");
+    }
+
+    /**
      * Returns the name of the class being tested.
      * The default implementation takes the simple name of the test class and removes the trailing "Test".
      * Override if needed.
