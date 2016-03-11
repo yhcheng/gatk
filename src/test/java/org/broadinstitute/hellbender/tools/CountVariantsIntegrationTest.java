@@ -31,7 +31,7 @@ public final class CountVariantsIntegrationTest extends CommandLineProgramTest {
     public Object[][] countVariantsVCFInputs() {
         return new Object[][]{
                 {"count_variants.vcf", "", 26L},
-                {"count_variants.vcf.blockgz.gz", "", 26L},
+                {"count_variants.blockgz.gz", "", 26L},
                 {"count_variants_withSequenceDict.vcf", "", 26L},
                 {"count_variants_withSequenceDict.vcf", "-L 1", 14L},
         };
