@@ -8,6 +8,8 @@ import htsjdk.variant.variantcontext.writer.Options;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
 import htsjdk.variant.vcf.*;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.cmdline.Argument;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
@@ -78,55 +80,50 @@ import java.util.*;
  * <h3>Usage examples</h3>
  * <h4>Inform the genotype assignment of NA12878 using the 1000G Euro panel</h4>
  * <pre>
- * java -jar GenomeAnalysisTK.jar \
- *   -T CalculateGenotypePosteriors \
- *   -R reference.fasta \
+ * ./gatk-launch \
+ *   CalculateGenotypePosteriors \
  *   -V NA12878.wgs.HC.vcf \
  *   -supporting 1000G_EUR.genotypes.combined.vcf \
- *   -o NA12878.wgs.HC.posteriors.vcf 
+ *   -O NA12878.wgs.HC.posteriors.vcf
  * </pre>
  *
  * <h4>Refine the genotypes of a large panel based on the discovered allele frequency</h4>
  * <pre>
- * java -jar GenomeAnalysisTK.jar \
- *   -T CalculateGenotypePosteriors \
- *   -R reference.fasta \
+ * ./gatk-launch \
+ *   CalculateGenotypePosteriors \
  *   -V input.vcf \
- *   -o output.withPosteriors.vcf
+ *   -O output.withPosteriors.vcf
  * </pre>
  *
  * <h4>Apply frequency and HWE-based priors to the genotypes of a family without including the family allele counts
  * in the allele frequency estimates the genotypes of a large panel based on the discovered allele frequency</h4>
  * <pre>
- * java -jar GenomeAnalysisTK.jar \
- *   -T CalculateGenotypePosteriors \
- *   -R reference.fasta \
+ * ./gatk-launch \
+ *   CalculateGenotypePosteriors \
  *   -V input.vcf \
- *   -o output.withPosteriors.vcf \
+ *   -O output.withPosteriors.vcf \
  *   --ignoreInputSamples
  * </pre>
  *
  * <h4>Calculate the posterior genotypes of a callset, and impose that a variant *not seen* in the external panel
  * is tantamount to being AC=0, AN=100 within that panel</h4>
  * <pre>
- * java -jar GenomeAnalysisTK.jar \
- *   -T CalculateGenotypePosteriors \
- *   -R reference.fasta \
+ * ./gatk-launch \
+ *   CalculateGenotypePosteriors \
  *   -supporting external.panel.vcf \
  *   -V input.vcf \
- *   -o output.withPosteriors.vcf \
+ *   -O output.withPosteriors.vcf \
  *   --numRefSamplesIfNoCall 100
  * </pre>
  *
  * <h4>Apply only family priors to a callset</h4>
  * <pre>
- * java -jar GenomeAnalysisTK.jar \
- *   -T CalculateGenotypePosteriors \
- *   -R reference.fasta \
+ * ./gatk-launch \
+ *   CalculateGenotypePosteriors \
  *   -V input.vcf \
  *   --skipPopulationPriors \
  *   -ped family.ped \
- *   -o output.withPosteriors.vcf
+ *   -O output.withPosteriors.vcf
  * </pre>
  *
  */
@@ -138,6 +135,8 @@ import java.util.*;
         programGroup = VariantProgramGroup.class
 )
 public final class CalculateGenotypePosteriors extends VariantWalker {
+
+    private static final Logger logger = LogManager.getLogger(CalculateGenotypePosteriors.class);
 
     /**
      * Supporting external panels. Allele counts from these panels (taken from AC,AN or MLEAC,AN or raw genotypes) will
@@ -214,14 +213,20 @@ public final class CalculateGenotypePosteriors extends VariantWalker {
     @Argument(fullName="pedigree", shortName="ped", doc="Pedigree file", optional=true)
     private File pedigreeFile = null;
 
-    private final FamilyLikelihoods famUtils = new FamilyLikelihoods();
+    private FamilyLikelihoods famUtils;
     private SampleDB sampleDB = null;
 
     private VariantContextWriter vcfWriter;
 
     @Override
     public void onTraversalStart() {
-        vcfWriter = new VariantContextWriterBuilder().setOutputFile(out).setOutputFileType(VariantContextWriterBuilder.OutputType.VCF).unsetOption(Options.INDEX_ON_THE_FLY).build();
+        final VariantContextWriterBuilder builder = new VariantContextWriterBuilder().setOutputFile(out).setOutputFileType(VariantContextWriterBuilder.OutputType.VCF);
+        if (hasReference()){
+            vcfWriter = builder.setReferenceDictionary(getBestAvailableSequenceDictionary()).setOption(Options.INDEX_ON_THE_FLY).build();
+        } else {
+            vcfWriter = builder.unsetOption(Options.INDEX_ON_THE_FLY).build();
+            logger.info("Can't make an index for output file " + out + " because a reference dictionary is required for creating Tribble indices on the fly");
+        }
 
         sampleDB = initializeSampleDB();
 
@@ -232,7 +237,7 @@ public final class CalculateGenotypePosteriors extends VariantWalker {
         //Get the trios from the families passed as ped
         if (!skipFamilyPriors){
             final Set<Trio> trios = sampleDB.getTrios();
-            if(trios.size()<1) {
+            if(trios.isEmpty()) {
                 logger.info("No PED file passed or no *non-skipped* trios found in PED file. Skipping family priors.");
                 skipFamilyPriors = true;
             }
@@ -267,7 +272,7 @@ public final class CalculateGenotypePosteriors extends VariantWalker {
         vcfWriter.writeHeader(new VCFHeader(headerLines, vcfSamples));
 
         final Map<String,Set<Sample>> families = sampleDB.getFamilies(vcfSamples);
-        famUtils.initialize(sampleDB, deNovoPrior, vcfSamples, families);
+        famUtils = new FamilyLikelihoods(sampleDB, deNovoPrior, vcfSamples, families);
     }
 
     /**
@@ -318,12 +323,9 @@ public final class CalculateGenotypePosteriors extends VariantWalker {
     }
 
     @Override
-    public Object onTraversalDone() {
-        try {
-            return null;
-        } finally {
-            vcfWriter.close();
-        }
+    public Object onTraversalSuccess() {
+        vcfWriter.close();
+        return null;
     }
 }
 

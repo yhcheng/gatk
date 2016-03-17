@@ -25,9 +25,8 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     //use the first 20 variants to save time; they have a nice range of AC from 4 to over 4000
     public void testUsingDiscoveredAF() throws IOException {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
-                "-T CalculateGenotypePosteriors" +
-                        " -o %s" +
-                        " -R " + b37_reference_20_21 +
+                        " -O %s" +
+                        " -R " + b37_reference_20_21 +    //NOTE: we need a reference for -L
                         " -L 20:10,000,000-10,001,432" +
                         " -V " + largeDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf",
                 Collections.singletonList(dir + "expectedCGP_testUsingDiscoveredAF.vcf")
@@ -40,9 +39,9 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     //only test the first 20 variants to save time
     public void testMissingPriors() throws IOException {
         IntegrationTestSpec spec = new IntegrationTestSpec(
-                "-T CalculateGenotypePosteriors -useACoff" +
-                        " -o %s" +
-                        " -R " + b37_reference_20_21 +
+                        "-useACoff" +
+                        " -O %s" +
+                        " -R " + b37_reference_20_21 +    //NOTE: we need a reference for -L
                         " -L 20:10,000,000-10,001,432" +
                         " -V " + largeDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf",
                 Collections.singletonList(dir + "expectedCGP_testMissingPriors.vcf")
@@ -53,9 +52,9 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     @Test
     public void testInputINDELs() throws IOException {
         IntegrationTestSpec spec = new IntegrationTestSpec(
-                "-T CalculateGenotypePosteriors -useACoff" +
-                        " -o %s" +
-                        " -R " + b37_reference_20_21 +
+                        "-useACoff" +
+                        " -O %s" +
+                        " -R " + b37_reference_20_21 +    //NOTE: we need a reference for -L
                         " -L 20:10,000,000-10,100,000" +
                         " -V " + dir + "NA12878.Jan2013.haplotypeCaller.subset.indels.vcf" +
                         " -supporting " + largeDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf",
@@ -67,8 +66,8 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     @Test
     public void testFamilyPriors() throws IOException {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
-                "-T CalculateGenotypePosteriors -useACoff" +
-                        " -o %s" +
+                        "-useACoff" +
+                        " -O %s" +
                         " -ped " + CEUtrioFamilyFile +
                         " -V " + CEUtrioTest +
                         " -supporting " + CEUtrioPopPriorsTest,
@@ -80,8 +79,7 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     @Test
     public void testSingleParentFamily() throws IOException {
         final IntegrationTestSpec spec = new IntegrationTestSpec(
-                "-T CalculateGenotypePosteriors " +
-                        " -o %s" +
+                        " -O %s" +
                         " -ped " + threeMemberNonTrioFamilyFile +
                         " -V " + getThreeMemberNonTrioTest +
                         " -skipPop",

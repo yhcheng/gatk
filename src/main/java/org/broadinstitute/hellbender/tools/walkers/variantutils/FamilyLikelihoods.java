@@ -2,7 +2,8 @@ package org.broadinstitute.hellbender.tools.walkers.variantutils;
 
 import htsjdk.variant.utils.GeneralUtils;
 import htsjdk.variant.variantcontext.*;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.QualityUtils;
@@ -15,12 +16,11 @@ import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import java.util.*;
 
 /**
- * FamilyLikelihoodsUtils code is based on PhaseByTransmission with added posterior probability calculations
+ * Utility to compute genotype posteriors given family priors.
  */
-
 public final class FamilyLikelihoods {
 
-    private static Logger logger = Logger.getLogger(FamilyLikelihoods.class);
+    private static final Logger logger = LogManager.getLogger(FamilyLikelihoods.class);
 
     //Matrix of priors for all genotype combinations
     private final EnumMap<GenotypeType,EnumMap<GenotypeType,EnumMap<GenotypeType,Integer>>> mvCountMatrix =
@@ -43,6 +43,13 @@ public final class FamilyLikelihoods {
         MOTHER,
         FATHER,
         CHILD
+    }
+
+    public FamilyLikelihoods(final SampleDB sampleDB, final double DNprior, final Set<String> vcfSamples, final Map<String,Set<Sample>> families){
+        this.deNovoPrior = DNprior;
+        Arrays.fill(configurationLikelihoodsMatrix,0);
+        buildMatrices();
+        trios = setTrios(sampleDB, vcfSamples, families);
     }
 
     /**
@@ -112,8 +119,6 @@ public final class FamilyLikelihoods {
         genotypeAttributes.put(GATKVCFConstants.JOINT_POSTERIOR_TAG_NAME, phredScaledJP);
 
         final GenotypeBuilder builder = new GenotypeBuilder(genotype);
-
-        //final double[] log10Posteriors = MathUtils.toLog10(normalizedPosteriors);
 
         //update genotype types based on posteriors
         GATKVariantContextUtils.updateGenotypeAfterSubsetting(vc.getAlleles(), builder,
@@ -189,14 +194,11 @@ public final class FamilyLikelihoods {
         return MathUtils.normalizeFromLog10(recalcPosteriors,true,true);
     }
 
-    public void initialize(final SampleDB sampleDB, final double DNprior, final Set<String> vcfSamples, final Map<String,Set<Sample>> families){
-        this.deNovoPrior = DNprior;
-        Arrays.fill(configurationLikelihoodsMatrix,0);
-        buildMatrices();
-        trios = setTrios(sampleDB, vcfSamples, families);
-    }
-
+    /**
+     * Computes phred-scaled genotype posteriors given the data in the given variant context and family priors given by this object.
+     */
     public GenotypesContext calculatePosteriorGLs(final VariantContext vc){
+        Utils.nonNull(vc);
         final GenotypesContext genotypesContext = GenotypesContext.copy(vc.getGenotypes());
 
         for (final Sample sample : trios) {

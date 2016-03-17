@@ -7,7 +7,6 @@ import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.testng.Assert;
-import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
@@ -18,19 +17,11 @@ import java.util.List;
 @SuppressWarnings("unchecked")
 public final class PosteriorLikelihoodsUtilsUnitTest extends BaseTest {
 
-    Allele Aref, T, C, G, Cref, ATC, ATCATC;
-
-    @BeforeSuite
-    public void setup() {
-        // alleles
-        Aref = Allele.create("A", true);
-        Cref = Allele.create("C", true);
-        T = Allele.create("T");
-        C = Allele.create("C");
-        G = Allele.create("G");
-        ATC = Allele.create("ATC");
-        ATCATC = Allele.create("ATCATC");
-    }
+    final Allele Aref = Allele.create("A", true);
+    final Allele T = Allele.create("T");
+    final Allele C = Allele.create("C");
+    final Allele ATC = Allele.create("ATC");
+    final Allele ATCATC = Allele.create("ATCATC");
 
     private String arraysEq(final int[] a, final int[] b) {
         if ( a.length != b.length ) {
@@ -101,7 +92,7 @@ public final class PosteriorLikelihoodsUtilsUnitTest extends BaseTest {
         Assert.assertTrue(test1exp1.hasPL());
         final Genotype test1exp2 = makeGwithPLs("s2",T,T,new double[]{-6.000075e+00, -3.765981e+00, -7.488009e-05});
         final Genotype test1exp3 = makeGwithPLs("s3",Aref,Aref,new double[]{-0.0007438855, -2.7666503408, -9.0007438855});
-        Assert.assertEquals("java.util.ArrayList",test1result.getGenotype(0).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY).getClass().getCanonicalName());
+        Assert.assertTrue(java.util.List.class.isAssignableFrom(test1result.getGenotype(0).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY).getClass()));
         Assert.assertEquals(arraysEq(test1exp1.getPL(), _mleparse((List<Integer>)test1result.getGenotype(0).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY))), "");
         Assert.assertEquals(arraysEq(test1exp2.getPL(),_mleparse((List<Integer>)test1result.getGenotype(1).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY))), "");
         Assert.assertEquals(arraysEq(test1exp3.getPL(),_mleparse((List<Integer>)test1result.getGenotype(2).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY))), "");

@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.utils;
 
+import com.google.common.primitives.Ints;
 import htsjdk.samtools.SAMFileHeader;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ArrayUtils;
@@ -870,11 +871,6 @@ public final class Utils {
      */
     public static List<Integer> listFromPrimitives(final int[] ar) {
         Utils.nonNull(ar);
-        final List<Integer> lst = new ArrayList<>(ar.length);
-        for ( final int d : ar ) {
-            lst.add(d);
-        }
-
-        return lst;
+        return Ints.asList(ar);
     }
 }

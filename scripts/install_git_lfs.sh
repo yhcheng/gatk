@@ -32,6 +32,9 @@ git-lfs/bin/git-lfs pull
 echo "pull again to work around https://github.com/github/git-lfs/issues/904"
 git-lfs/bin/git-lfs pull
 
+echo "and pull once again to work around https://github.com/github/git-lfs/issues/904"
+git-lfs/bin/git-lfs pull
+
 echo "ls-files"
 git-lfs/bin/git-lfs ls-files
 ls -lah src/test/resources/large/

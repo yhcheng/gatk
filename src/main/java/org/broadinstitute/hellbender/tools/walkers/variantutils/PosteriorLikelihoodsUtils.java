@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.variantutils;
 
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -14,6 +15,9 @@ public final class PosteriorLikelihoodsUtils {
 
     private PosteriorLikelihoodsUtils(){}
 
+    /**
+     * Calculates phred-scaled posterior probabilities for genotypes given the data and allele frequency priors.
+     */
     public static VariantContext calculatePosteriorGLs(final VariantContext vc1,
                                                        final Collection<VariantContext> resources,
                                                        final int numRefSamplesFromMissingResources,
@@ -170,7 +174,8 @@ public final class PosteriorLikelihoodsUtils {
     }
 
     // convenience function for a single genotypelikelihoods array. Just wraps.
-    protected static double[] calculatePosteriorGLs(final double[] genotypeLikelihoods,
+    @VisibleForTesting
+    static double[] calculatePosteriorGLs(final double[] genotypeLikelihoods,
                                                  final double[] knownAlleleCountsByAllele,
                                                  final int ploidy,
                                                  final boolean useFlatPriors) {
@@ -189,7 +194,8 @@ public final class PosteriorLikelihoodsUtils {
      * @param ploidy - the number of chromosomes in the sample. For now restricted to 2.
      * @return - the Dirichlet-Multinomial distribution over genotype states
      */
-    protected static double[] getDirichletPrior(final double[] knownCountsByAllele, final int ploidy, final boolean useFlatPrior) {
+    @VisibleForTesting
+    static double[] getDirichletPrior(final double[] knownCountsByAllele, final int ploidy, final boolean useFlatPrior) {
         if ( ploidy != 2 ) {
             throw new IllegalStateException("Genotype priors not yet implemented for ploidy != 2");
         }
