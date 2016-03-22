@@ -592,5 +592,4 @@ public final class MathUtilsUnitTest extends BaseTest {
     public void testMedianOfNullList(){
         MathUtils.median(null);
     }
-
 }

@@ -1037,4 +1037,21 @@ public final class MathUtils {
     public static boolean wellFormedDouble(final double val) {
         return !Double.isInfinite(val) && !Double.isNaN(val);
     }
+
+    /**
+     * Calculate f(x) = Normal(x | mu = mean, sigma = sd)
+     * @param mean the desired mean of the Normal distribution
+     * @param sd the desired standard deviation of the Normal distribution
+     * @param x the value to evaluate
+     * @return a well-formed double
+     */
+    public static double normalDistribution(final double mean, final double sd, final double x) {
+        Utils.validateArg(sd >= 0, "sd: Standard deviation of normal must be >= 0");
+        Utils.validateArg(wellFormedDouble(mean) && wellFormedDouble(sd) && wellFormedDouble(x),
+                          "mean, sd, or, x : Normal parameters must be well formatted (non-INF, non-NAN)");
+
+        double a = 1.0 / (sd * Math.sqrt(2.0 * Math.PI));
+        double b = Math.exp(-1.0 * (Math.pow(x - mean, 2.0) / (2.0 * sd * sd)));
+        return a * b;
+    }
 }
