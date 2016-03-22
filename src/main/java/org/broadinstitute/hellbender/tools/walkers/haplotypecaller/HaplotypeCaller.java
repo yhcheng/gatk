@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
+import htsjdk.samtools.util.PeekableIterator;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import org.broadinstitute.hellbender.cmdline.Argument;
@@ -7,14 +8,20 @@ import org.broadinstitute.hellbender.cmdline.ArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.VariantProgramGroup;
-import org.broadinstitute.hellbender.engine.FeatureContext;
-import org.broadinstitute.hellbender.engine.ReadWindow;
-import org.broadinstitute.hellbender.engine.ReadWindowWalker;
-import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.activityprofile.ActivityProfile;
+import org.broadinstitute.hellbender.utils.activityprofile.ActivityProfileState;
+import org.broadinstitute.hellbender.utils.activityprofile.BandPassActivityProfile;
+import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
+import org.broadinstitute.hellbender.utils.locusiterator.LocusIteratorByState;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
+import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 
@@ -164,6 +171,9 @@ public class HaplotypeCaller extends ReadWindowWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, doc = "File to which variants should be written")
     public String outputVCF = null;
 
+    @Argument(fullName = "activeRegionsOnly", shortName = "AR", doc = "Call only active regions", optional = true)
+    public boolean activeRegionsOnly = false;
+
     private VariantContextWriter vcfWriter;
 
     private HaplotypeCallerEngine hcEngine;
@@ -172,7 +182,7 @@ public class HaplotypeCaller extends ReadWindowWalker {
     public boolean requiresReference() { return true; }
 
     @Override
-    protected int defaultWindowSize() { return 300; }
+    protected int defaultWindowSize() { return activeRegionsOnly ? 5000 : 300; }
 
     @Override
     protected int defaultWindowPadding() { return 100; }
@@ -193,7 +203,12 @@ public class HaplotypeCaller extends ReadWindowWalker {
 
     @Override
     public void apply( ReadWindow window, ReferenceContext referenceContext, FeatureContext featureContext ) {
-        for ( final AssemblyRegion assemblyRegion : readWindowToAssemblyRegions(window) ) {
+        Iterable<AssemblyRegion> assemblyRegions = activeRegionsOnly ? readWindowToActiveRegions(window, referenceContext) :
+                                                                       readWindowToAssemblyRegions(window);
+
+        for ( final AssemblyRegion assemblyRegion : assemblyRegions ) {
+            logger.debug("Processing assembly region at " + assemblyRegion.getSpan() + " isActive: " + assemblyRegion.isActive() + " numReads: " + assemblyRegion.getReads().size());
+
             List<VariantContext> callsInRegion = hcEngine.callRegion(assemblyRegion, featureContext);
 
             for ( final VariantContext call : callsInRegion ) {
@@ -213,7 +228,7 @@ public class HaplotypeCaller extends ReadWindowWalker {
      * @return a List of {@link AssemblyRegion} for processing by the HaplotypeCaller, covering the span of
      *         the original window
      */
-    private List<AssemblyRegion> readWindowToAssemblyRegions( final ReadWindow window ) {
+    private Iterable<AssemblyRegion> readWindowToAssemblyRegions( final ReadWindow window ) {
         List<AssemblyRegion> regions = new ArrayList<>();
 
         // Currently, we convert each window 1:1 into an equivalent AssemblyRegion, marked as active.
@@ -227,6 +242,58 @@ public class HaplotypeCaller extends ReadWindowWalker {
 
         regions.add(monolithicRegion);
         return regions;
+    }
+
+    private Iterable<AssemblyRegion> readWindowToActiveRegions( final ReadWindow window, final ReferenceContext referenceContext  ) {
+        final List<GATKRead> windowReads = new ArrayList<>();
+        for ( final GATKRead read : window ) {
+            windowReads.add(read);
+        }
+
+        final LocusIteratorByState locusIterator = new LocusIteratorByState(windowReads.iterator(), DownsamplingMethod.NONE, false, false, ReadUtils.getSamplesFromHeader(getHeaderForReads()), getHeaderForReads());
+        final ActivityProfile activityProfile = new BandPassActivityProfile(null, 50, 0.002, BandPassActivityProfile.MAX_FILTER_SIZE, BandPassActivityProfile.DEFAULT_SIGMA, getHeaderForReads());
+
+        List<AssemblyRegion> assemblyRegions = new ArrayList<>();
+        for ( final AlignmentContext pileup : locusIterator ) {
+            if ( ! activityProfile.isEmpty() && pileup.getLocation().getStart() != activityProfile.getEnd() + 1 ) {
+                assemblyRegions.addAll(activityProfile.popReadyActiveRegions(100, 50, 300, true));
+            }
+
+            if ( window.getInterval().contains(pileup.getLocation()) ) {
+                final SimpleInterval pileupInterval = new SimpleInterval(pileup.getLocation());
+                final ReferenceBases refBase = new ReferenceBases(new byte[]{referenceContext.getBases()[pileup.getLocation().getStart() - referenceContext.getInterval().getStart()]}, pileupInterval);
+                final ReferenceContext pileupRefContext = new ReferenceContext(new ReferenceMemorySource(refBase, getHeaderForReads().getSequenceDictionary()), pileupInterval);
+
+                activityProfile.add(hcEngine.isActive(null, pileupRefContext, pileup));
+            }
+        }
+        assemblyRegions.addAll(activityProfile.popReadyActiveRegions(100, 50, 300, true));
+
+        final PeekableIterator<GATKRead> reads = new PeekableIterator<>(windowReads.iterator());
+        AssemblyRegion lastRegion = null;
+        for ( final AssemblyRegion region : assemblyRegions ) {
+            if ( lastRegion != null ) {
+                for ( final GATKRead lastRegionRead : lastRegion.getReads() ) {
+                    if ( region.getExtendedSpan().overlaps(lastRegionRead) ) {
+                        region.add(lastRegionRead);
+                    }
+                }
+            }
+
+            while ( reads.hasNext() ) {
+                final GATKRead read = reads.peek();
+                if ( region.getExtendedSpan().overlaps(read) ) {
+                    region.add(reads.next());
+                }
+                else {
+                    break;
+                }
+            }
+
+            lastRegion = region;
+        }
+
+        return assemblyRegions;
     }
 
     @Override
