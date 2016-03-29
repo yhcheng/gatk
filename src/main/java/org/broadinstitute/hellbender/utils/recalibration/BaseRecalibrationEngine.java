@@ -35,13 +35,6 @@ public final class BaseRecalibrationEngine implements Serializable {
     protected static final Logger logger = LogManager.getLogger(BaseRecalibrationEngine.class);
     private final CovariateKeyCache keyCache;
 
-    /*
-     * Every call to EventType.values() (or any enum type) creates a new array instance but they are all equal (ie contain identical elements).
-     * This is very expensive and wasteful when this array is created billions of times as in the case of BQSR.
-     * The solution is to cache this array here.
-     */
-    private final EventType[] cachedEventTypes;
-
     /**
      * Reference window function for BQSR. For each read, returns an interval representing the span of
      * reference bases required by the BQSR algorithm for that read.
@@ -93,7 +86,6 @@ public final class BaseRecalibrationEngine implements Serializable {
         }
         recalTables = new RecalibrationTables(covariates, numReadGroups);
         keyCache = new CovariateKeyCache();
-        cachedEventTypes = EventType.values();
     }
 
     public void logCovariatesUsed() {
@@ -127,7 +119,7 @@ public final class BaseRecalibrationEngine implements Serializable {
         final byte[] baqArray = nErrors == 0 ? flatBAQArray(read) : calculateBAQArray(read, refDS);
 
         if( baqArray != null ) { // some reads just can't be BAQ'ed
-            final ReadCovariates covariates = RecalUtils.computeCovariates(read, readsHeader, this.covariates, true, keyCache);
+            final ReadCovariates covariates = RecalUtils.computeCovariates(read, readsHeader, this.covariates, false, keyCache);
             final boolean[] skip = calculateSkipArray(read, knownSites); // skip known sites of variation as well as low quality and non-regular bases
             final double[] snpErrors = calculateFractionalErrorArray(isSNP, baqArray);
             final double[] insertionErrors = calculateFractionalErrorArray(isInsertion, baqArray);
@@ -252,23 +244,21 @@ public final class BaseRecalibrationEngine implements Serializable {
         final int readLength = read.getLength();
         for( int offset = 0; offset < readLength; offset++ ) {
             if( ! recalInfo.skip(offset) ) {
-                for (int idx = 0; idx < cachedEventTypes.length; idx++) { //Note: we loop explicitly over cached values for speed
-                    final EventType eventType = cachedEventTypes[idx];
-                    final int[] keys = readCovariates.getKeySet(offset, eventType);
-                    final int eventIndex = eventType.ordinal();
-                    final byte qual = recalInfo.getQual(eventType, offset);
-                    final double isError = recalInfo.getErrorFraction(eventType, offset);
+                final EventType eventType = EventType.BASE_SUBSTITUTION;
+                final int[] keys = readCovariates.getKeySet(offset, eventType);
+                final int eventIndex = eventType.ordinal();
+                final byte qual = recalInfo.getQual(eventType, offset);
+                final double isError = recalInfo.getErrorFraction(eventType, offset);
 
-                    final int key0 = keys[0];
-                    final int key1 = keys[1];
+                final int key0 = keys[0];
+                final int key1 = keys[1];
 
-                    RecalUtils.incrementDatumOrPutIfNecessary3keys(qualityScoreTable, qual, isError, key0, key1, eventIndex);
+                RecalUtils.incrementDatumOrPutIfNecessary3keys(qualityScoreTable, qual, isError, key0, key1, eventIndex);
 
-                    for (int i = nSpecialCovariates; i < nCovariates; i++) {
-                        final int keyi = keys[i];
-                        if (keyi >= 0) {
-                            RecalUtils.incrementDatumOrPutIfNecessary4keys(recalTables.getTable(i), qual, isError, key0, key1, keyi, eventIndex);
-                        }
+                for (int i = nSpecialCovariates; i < nCovariates; i++) {
+                    final int keyi = keys[i];
+                    if (keyi >= 0) {
+                        RecalUtils.incrementDatumOrPutIfNecessary4keys(recalTables.getTable(i), qual, isError, key0, key1, keyi, eventIndex);
                     }
                 }
             }

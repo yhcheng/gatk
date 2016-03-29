@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.utils.recalibration.covariates;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -81,19 +82,27 @@ public final class ReadCovariates {
     //
     // ----------------------------------------------------------------------
 
-    protected int[][] getMismatchesKeySet() { return getKeySet(EventType.BASE_SUBSTITUTION); }
-    protected int[][] getInsertionsKeySet() { return getKeySet(EventType.BASE_INSERTION); }
-    protected int[][] getDeletionsKeySet() { return getKeySet(EventType.BASE_DELETION); }
+    @VisibleForTesting
+    int[][] getMismatchesKeySet() { return getKeySet(EventType.BASE_SUBSTITUTION); }
 
-    protected int[] getMismatchesKeySet(final int readPosition) {
+    @VisibleForTesting
+    int[][] getInsertionsKeySet() { return getKeySet(EventType.BASE_INSERTION); }
+
+    @VisibleForTesting
+    int[][] getDeletionsKeySet() { return getKeySet(EventType.BASE_DELETION); }
+
+    @VisibleForTesting
+    int[] getMismatchesKeySet(final int readPosition) {
         return getKeySet(readPosition, EventType.BASE_SUBSTITUTION);
     }
 
-    protected int[] getInsertionsKeySet(final int readPosition) {
+    @VisibleForTesting
+    int[] getInsertionsKeySet(final int readPosition) {
         return getKeySet(readPosition, EventType.BASE_INSERTION);
     }
 
-    protected int[] getDeletionsKeySet(final int readPosition) {
+    @VisibleForTesting
+    int[] getDeletionsKeySet(final int readPosition) {
         return getKeySet(readPosition, EventType.BASE_DELETION);
     }
 }
