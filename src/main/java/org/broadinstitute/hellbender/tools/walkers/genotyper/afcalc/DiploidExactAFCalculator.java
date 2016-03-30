@@ -51,9 +51,7 @@ public abstract class DiploidExactAFCalculator extends ExactAFCalculator {
                                           final boolean assignGenotypes) {
         Utils.nonNull(vc, "vc is null");
         Utils.nonNull(allelesToUse, "allelesToUse is null");
-        if (defaultPloidy != 2) {
-            throw new IllegalArgumentException("cannot support ploidy different than 2 and the default ploidy is " + defaultPloidy);
-        }
+
         return allelesToUse.size() == 1
                 ? GATKVariantContextUtils.subsetToRefOnly(vc, defaultPloidy)
                 : GATKVariantContextUtils.subsetAlleles(vc, allelesToUse,
