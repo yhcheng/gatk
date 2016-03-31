@@ -172,16 +172,31 @@ public final class SWPairwiseAlignment {
         if ( reference == null || reference.length == 0 || alternate == null || alternate.length == 0 )
             throw new IllegalArgumentException("Non-null, non-empty sequences are required for the Smith-Waterman calculation");
 
-        final int n = reference.length+1;
-        final int m = alternate.length+1;
-        final int[][] sw = new int[n][m];
-        if ( keepScoringMatrix ) {
-            SW = sw;
+        int matchIndex = -1;
+        if (overhangStrategy == OverhangStrategy.SOFTCLIP || overhangStrategy == OverhangStrategy.IGNORE) {
+            // Use a substring search to find an exact match of the alternate in the reference
+            // NOTE: This approach only works for SOFTCLIP and IGNORE overhang strategies
+            matchIndex = new String(reference).lastIndexOf(new String(alternate));
         }
-        final int[][] btrack=new int[n][m];
 
-        calculateMatrix(reference, alternate, sw, btrack);
-        alignmentResult = calculateCigar(sw, btrack, overhangStrategy); // length of the segment (continuous matches, insertions or deletions)
+        if (matchIndex != -1) {
+            // generate the alignment result when the substring search was successful
+            final List<CigarElement> lce = new ArrayList<>(alternate.length);
+            lce.add(makeElement(State.MATCH, alternate.length));
+            alignmentResult = new SWPairwiseAlignmentResult(AlignmentUtils.consolidateCigar(new Cigar(lce)), matchIndex);
+        }
+        else {
+            final int n = reference.length+1;
+            final int m = alternate.length+1;
+            final int[][] sw = new int[n][m];
+            if ( keepScoringMatrix ) {
+                SW = sw;
+            }
+            final int[][] btrack=new int[n][m];
+
+            calculateMatrix(reference, alternate, sw, btrack);
+            alignmentResult = calculateCigar(sw, btrack, overhangStrategy); // length of the segment (continuous matches, insertions or deletions)
+        }
     }
 
     /**
