@@ -23,7 +23,7 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
      *     using actual valid reads (13 of them) information from "insert_size_metrics_test.bam", where inferred length are
      *     {36 36 36 38 38 40 41 41 41 41 44 44 45} with median == 40.
      */
-    @Test
+    @Test(groups = "sv")
     public void testRanges1() throws Exception {
 
         final Map<Integer, Long> map = new TreeMap<>();
@@ -46,15 +46,15 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
     }
 
     /**
-     * Tests "void aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> unsortedHistogramsAtRGLevel,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfLibraries,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfSamples,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfAllReads)
+     * Tests "void aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
+                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
+                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
+                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>)
      * Test case: 1 sample, 2 libraries
      *            3 read groups, 2 belonging to 1 library, 1 belonging to another
      * @throws Exception
      */
-    @Test
+    @Test(groups = "sv")
     public void testAggregator() throws Exception{
 
 
@@ -145,12 +145,12 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
     }
 
     /**
-     * Tests void convertSortedMapToHTSHistogram(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> rawHistograms,
-                                                       Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> htsjdkHistogramsAndMetrics,
-                                                       final double histogramMADTolerance)
+     * Tests void convertSortedMapToHTSHistogram(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
+                                                       Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>>,
+                                                       final double)
      * @throws Exception
      */
-    @Test
+    @Test(groups = "sv")
     public void testHisttoHTSJDKHistogramConverter() throws Exception{
 
         final InsertSizeMetricsCollectorSpark.GroupMetaInfo testGroup = new InsertSizeMetricsCollectorSpark.GroupMetaInfo("sample", "library", "readGroup", MetricAccumulationLevel.READ_GROUP);

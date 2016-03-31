@@ -19,6 +19,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+
+// TODO: add cram supports, which requires ref
 public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProgramTest{
 
     private static final File TEST_DATA_DIR = new File(getTestDataDir(), "picard/analysis/CollectInsertSizeMetrics");
@@ -31,8 +33,7 @@ public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProg
     @DataProvider(name="metricsfiles")
     public Object[][] insertSizeMetricsFiles() {
         return new Object[][] {
-                {"insert_size_metrics_test.bam", null},
-                {"insert_size_metrics_test.cram", hg19_chr1_1M_Reference} // TODO: cram requires ref, but actually ref not quite used yet currently
+                {"insert_size_metrics_test.bam", null}
         };
     }
 
@@ -52,11 +53,6 @@ public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProg
         args.add(textOut.getAbsolutePath());
         args.add("-" + "HIST");
         args.add(pdfOut.getAbsolutePath());
-        if (null != referenceName) {
-            final File REF = new File(referenceName);
-            args.add("-" + StandardArgumentDefinitions.REFERENCE_SHORT_NAME);
-            args.add(REF.getAbsolutePath());
-        }
 
         // some filter options
         args.add("-" + "E");
@@ -110,14 +106,13 @@ public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProg
             }
         };
         Collections.sort(metricsList, metricsMetaInfoComparator);
-//        metricsList.sort(metricsMetaInfoComparator);
 
         //                            SAMP       LIB             RG         OR    CNT   MIN     MAX     MED     MAD     MEAN   SD  RANGES
         testStats(metricsList.get(0), null,      null,           null,      "FR", 13,   36,     45,     41,     3,      40.1, 3.1, 1, 1, 1, 7, 7, 7, 9, 11, 11, 11);  // ALL_READS
 
         testStats(metricsList.get(1), "NA12878", null,           null,      "FR", 13,   36,     45,     41,     3,      40.1, 3.1, 1, 1, 1, 7, 7, 7, 9, 11, 11, 11);  // SAMPLE
 
-        testStats(metricsList.get(2), "NA12878", "Solexa-41734", null,      "FR",  2,   36,     41,   38.5,   2.5,      38.5, 3.5, 5, 5, 5, 5, 5, 7, 7,  7,  7,  7);  // library 1
+        testStats(metricsList.get(2), "NA12878", "Solexa-41734", null,      "FR",  2,   36,     41,   38.5,   2.5,      38.5, 3.5, 5, 5, 5, 5, 5, 7, 7,  7,  7,  7);  // libraries
         testStats(metricsList.get(3), "NA12878", "Solexa-41748", null,      "FR",  9,   36,     45,     40,     2,      39.6, 2.9, 1, 3, 3, 3, 5, 5, 9,  9, 11, 11);
         testStats(metricsList.get(4), "NA12878", "Solexa-41753", null,      "FR",  2,   44,     44,     44,     0,        44,   0, 1, 1, 1, 1, 1, 1, 1,  1,  1,  1);
 
