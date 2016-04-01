@@ -163,6 +163,57 @@ public final class SWPairwiseAlignment {
     public int getAlignmentStart2wrt1() { return alignmentResult.alignment_offset; }
 
     /**
+     * Use KMP string search algorithm to find last occurence of the query
+     * (based on KMP algorithm in "Algorithms, 4th edition", Sedgewick and Wayne)
+     *
+     * Returns the index of the last occurence or -1 if the query string is not found
+     *
+     * @param reference the reference sequence
+     * @param query the query sequence
+     */
+    private int lastIndexOf(final byte[] reference, final byte[] query) {
+        int N = reference.length;
+        int M = query.length;
+
+        // build next state table
+        int[] next = new int[M];
+        int i = M - 1;
+        int j = M;
+        while (i >= 0) {
+            if (i == M - 1) {
+                next[i] = M;
+            }
+            else if (query[i] != query[j]) {
+                next[i] = j;
+            }
+            else {
+                next[i] = next[j];
+            }
+            while (j < M && query[i] != query[j]) {
+                j = next[j];
+            }
+            j--;
+            i--;
+        }
+
+        // search right to left
+        i = N - 1;
+        j = M - 1;
+        while (i >= 0 && j >= 0) {
+            while (j < M && reference[i] != query[j]) {
+                j = next[j];
+            }
+            j--;
+            i--;
+        }
+
+        if (j == -1) {
+            return i + 1;
+        }
+        return -1;
+    }
+
+    /**
      * Aligns the alternate sequence to the reference sequence
      *
      * @param reference  ref sequence
@@ -176,7 +227,8 @@ public final class SWPairwiseAlignment {
         if (overhangStrategy == OverhangStrategy.SOFTCLIP || overhangStrategy == OverhangStrategy.IGNORE) {
             // Use a substring search to find an exact match of the alternate in the reference
             // NOTE: This approach only works for SOFTCLIP and IGNORE overhang strategies
-            matchIndex = new String(reference).lastIndexOf(new String(alternate));
+            // matchIndex = new String(reference).lastIndexOf(new String(alternate));
+            matchIndex = lastIndexOf(reference, alternate);
         }
 
         if (matchIndex != -1) {
