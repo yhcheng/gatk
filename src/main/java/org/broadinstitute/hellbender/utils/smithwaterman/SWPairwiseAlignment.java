@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.io.FileNotFoundException;
+import java.io.PrintWriter;
 
 /**
  * Pairwise discrete smith-waterman alignment
@@ -21,6 +23,42 @@ import java.util.List;
  * ************************************************************************
  */
 public final class SWPairwiseAlignment {
+
+    // used to profile Smith-Waterman performance
+    static final boolean doProfiling = true;
+    static long searchTime = 0;
+    static long swTime = 0;
+    static long totalCalls = 0;
+    static long totalMatch = 0;
+
+    // used to dump all Smith-Waterman calls to a file
+    static final boolean doDump = false;
+    static PrintWriter dumpWriter;
+
+    static {
+        if (doDump) {
+            try {
+                dumpWriter = new PrintWriter("smith-waterman.log");
+            }
+            catch (FileNotFoundException e) {
+                e.printStackTrace();
+            }
+        }
+        if (doProfiling) {
+            // print stats when the Java VM shuts down
+            Runtime.getRuntime().addShutdownHook(new Thread() {
+                    public void run() {
+                        System.err.println("Time in Smith-Waterman search = " +
+                                           SWPairwiseAlignment.searchTime * 1e-9 + " sec");
+                        System.err.println("Time in Smith-Waterman full   = " +
+                                           SWPairwiseAlignment.swTime * 1e-9 + " sec");
+                        System.err.printf("Total Smith-Waterman calls    = %d (%d substring matches = %.2f %%)\n",
+                                          SWPairwiseAlignment.totalCalls, SWPairwiseAlignment.totalMatch,
+                                          100.0 * SWPairwiseAlignment.totalMatch / SWPairwiseAlignment.totalCalls);
+                    }
+                });
+        }
+    }
 
     /**
      * Holds the core Smith-Waterman alignment parameters of
@@ -163,8 +201,7 @@ public final class SWPairwiseAlignment {
     public int getAlignmentStart2wrt1() { return alignmentResult.alignment_offset; }
 
     /**
-     * Use KMP string search algorithm to find last occurence of the query
-     * (based on KMP algorithm in "Algorithms, 4th edition", Sedgewick and Wayne)
+     * Find the last occurence of the query sequence in the reference sequence
      *
      * Returns the index of the last occurence or -1 if the query string is not found
      *
@@ -175,41 +212,16 @@ public final class SWPairwiseAlignment {
         int N = reference.length;
         int M = query.length;
 
-        // build next state table
-        int[] next = new int[M];
-        int i = M - 1;
-        int j = M;
-        while (i >= 0) {
-            if (i == M - 1) {
-                next[i] = M;
+        for (int i = N - M; i >= 0; i--) {
+            int j = 0;
+            while (j < M && reference[i+j] == query[j]) {
+                j++;
             }
-            else if (query[i] != query[j]) {
-                next[i] = j;
+            if (j == M) {
+                return i;
             }
-            else {
-                next[i] = next[j];
-            }
-            while (j < M && query[i] != query[j]) {
-                j = next[j];
-            }
-            j--;
-            i--;
         }
 
-        // search right to left
-        i = N - 1;
-        j = M - 1;
-        while (i >= 0 && j >= 0) {
-            while (j < M && reference[i] != query[j]) {
-                j = next[j];
-            }
-            j--;
-            i--;
-        }
-
-        if (j == -1) {
-            return i + 1;
-        }
         return -1;
     }
 
@@ -223,12 +235,23 @@ public final class SWPairwiseAlignment {
         if ( reference == null || reference.length == 0 || alternate == null || alternate.length == 0 )
             throw new IllegalArgumentException("Non-null, non-empty sequences are required for the Smith-Waterman calculation");
 
+        long startTime;
+        if (doProfiling) {
+            startTime = System.nanoTime();
+        }
+
+        totalCalls++;
+
         int matchIndex = -1;
         if (overhangStrategy == OverhangStrategy.SOFTCLIP || overhangStrategy == OverhangStrategy.IGNORE) {
             // Use a substring search to find an exact match of the alternate in the reference
             // NOTE: This approach only works for SOFTCLIP and IGNORE overhang strategies
-            // matchIndex = new String(reference).lastIndexOf(new String(alternate));
             matchIndex = lastIndexOf(reference, alternate);
+        }
+
+        if (doProfiling) {
+            searchTime += System.nanoTime() - startTime;
+            startTime = System.nanoTime();
         }
 
         if (matchIndex != -1) {
@@ -236,6 +259,7 @@ public final class SWPairwiseAlignment {
             final List<CigarElement> lce = new ArrayList<>(alternate.length);
             lce.add(makeElement(State.MATCH, alternate.length));
             alignmentResult = new SWPairwiseAlignmentResult(AlignmentUtils.consolidateCigar(new Cigar(lce)), matchIndex);
+            totalMatch++;
         }
         else {
             final int n = reference.length+1;
@@ -248,7 +272,18 @@ public final class SWPairwiseAlignment {
 
             calculateMatrix(reference, alternate, sw, btrack);
             alignmentResult = calculateCigar(sw, btrack, overhangStrategy); // length of the segment (continuous matches, insertions or deletions)
+
+            if (doProfiling) {
+                swTime += System.nanoTime() - startTime;
+            }
         }
+
+        if (doDump) {
+            dumpWriter.printf("%s %s %d %d %d %d %s %s %d\n", new String(reference), new String(alternate),
+                    parameters.w_match, parameters.w_mismatch, parameters.w_open, parameters.w_extend,
+                    overhangStrategy.toString(), alignmentResult.cigar, alignmentResult.alignment_offset);
+            dumpWriter.flush();
+        }        
     }
 
     /**
