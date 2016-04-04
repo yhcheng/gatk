@@ -77,6 +77,7 @@ public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProg
         Assert.assertEquals(metricsList.size(), 10);
 
         // a comparator for sorting the metrics list by hierarchy and within the same level alphanumerically
+        // TODO: if this special comparator is to be refactored out, efficiency must be addressed (ugly right now)
         final Comparator<InsertSizeMetrics> metricsMetaInfoComparator = new Comparator<InsertSizeMetrics>(){
             @Override public int compare(final InsertSizeMetrics m1, final InsertSizeMetrics m2){
 
@@ -89,9 +90,11 @@ public final class CollectInsertSizeMetricsSparkUnitTest extends CommandLineProg
                     b2 += (m2.READ_GROUP != null) ? 0b001: 0;
 
                 int result = 0;
-                if(b1!=b2){
+                if(b1!=b2){ // if two groups are of different level
                     result = (b1 < b2) ? -1 : 1;
-                }else{ // note that both at All_reads level is impossible
+                }else{      // two groups are of the same level
+                    // if code reaches here, m1.SAMPLE and m2.SAMPLE can't be null, because both at All_reads level is impossible,
+                    // hence the following comparison is fine.
                     int i = m1.SAMPLE.compareToIgnoreCase(m2.SAMPLE);
                     if(0b100==b1){ // both at sample level
                         result = i;

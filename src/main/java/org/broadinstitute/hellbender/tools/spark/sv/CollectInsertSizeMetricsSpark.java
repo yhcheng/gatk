@@ -18,6 +18,7 @@ import org.broadinstitute.hellbender.metrics.MetricsUtils;
 import org.broadinstitute.hellbender.metrics.MetricAccumulationLevel;
 import org.broadinstitute.hellbender.tools.picard.analysis.InsertSizeMetrics;
 import org.broadinstitute.hellbender.utils.R.RScriptExecutor;
+import org.broadinstitute.hellbender.utils.R.RScriptExecutorException;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
@@ -29,6 +30,7 @@ import java.util.EnumSet;
 // TODO: filter reads based on only isReverseStrand/mateIsReverseStrand (strand bias)
 // TODO: filter reads based on {MATE_ON_SAME_CONTIG, MATE_DIFFERENT_STRAND, GOOD_CIGAR, NON_ZERO_REFERENCE_LENGTH_ALIGNMENT}
 // TODO: filter reads based on length value (if too large), and/or minimum_pct like in Picard.
+// TODO: user argument validation (eg. maxMADTolerance)
 @CommandLineProgramProperties(
         summary        = "Program to collect insert size distribution information in SAM/BAM file(s)",
         oneLineSummary = "Collect Insert Size Distribution on Spark",
@@ -57,9 +59,9 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
     public double maxMADTolerance = 10.0;
 
     // read filtering criteria
-    @Argument(doc = "If set to true, use pairs of reads that are not properly oriented.",
-              shortName = "nPP",
-              fullName = "useNonProperlyPairedReads",
+    @Argument(doc = "If set to true, filter pairs of reads that are not properly--as judged by aligner--oriented.",
+              shortName = "PP",
+              fullName = "filterNonProperlyPairedReads",
               optional = true)
     public boolean filterNonProperlyPairedReads = false;
 
@@ -99,7 +101,7 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
               shortName="LEVEL",
               fullName = "MetricsAccumulationLevel",
               optional = false)
-    public Set<MetricAccumulationLevel> METRIC_ACCUMULATION_LEVEL = EnumSet.of(MetricAccumulationLevel.ALL_READS);
+    public Set<MetricAccumulationLevel> metricAccumulationLevel = EnumSet.of(MetricAccumulationLevel.ALL_READS);
 
     /**
      * Which end of a read pair to use for collecting insert size metrics.
@@ -119,10 +121,7 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
     }
 
     @Argument(doc = "Which end of pairs to use for collecting information. " +
-                    "Possible values:{FIRST, SECOND}." + //TODO: option EITHER is not supported yet
-                    "Option EITHER picks up information from 1st end when both ends are available, " +
-                    "and pick either end when only one end is available. " +
-                    "(Remember, in SV analysis, a truncated region may be investigated, so this is possible.)",
+                    "Possible values:{FIRST, SECOND}.", //TODO: option EITHER is not supported yet
               shortName = "E",
               fullName = "whichEndOfPairToUse",
               optional = true)
@@ -142,17 +141,20 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
         final SAMFileHeader readsHeader = getHeaderForReads();
         final String inputFileName = getReadSourceName();
 
-        // Class where real metric-collection work is delegated to.
         final InsertSizeMetricsCollectorSpark collector = new InsertSizeMetricsCollectorSpark(filteredReads,
                                                                                               readsHeader,
-                                                                                              METRIC_ACCUMULATION_LEVEL,
+                                                                                              metricAccumulationLevel,
                                                                                               maxMADTolerance);
 
         try{
             writeMetricsFile(collector);
             writeHistogramPDF(inputFileName);
-        } catch (final Exception e){
-            System.err.println("Errors occurred during writing output to file." + e.getMessage());
+        } catch (final IOException e){
+            System.err.println("Errors occurred during writing output to file.");
+            System.err.println(e.getMessage());
+        } catch (final RScriptExecutorException e){
+            System.err.println("Errors occurred while generating histogram plots with R script.");
+            System.err.println(e.getMessage());
         }
     }
 
@@ -240,6 +242,11 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
         }
     }
 
+    /**
+     * Writes metrics to flat file.
+     * @param collector    Worker class that performs actual metrics collection work.
+     * @throws IOException
+     */
     @VisibleForTesting
     void writeMetricsFile(final InsertSizeMetricsCollectorSpark collector) throws IOException {
 
@@ -254,12 +261,14 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
         }
     }
 
+    /**
+     * Calls R script to plot histogram(s) in PDF.
+     * @param inputFileName
+     * @throws IOException
+     * @throws RScriptExecutorException
+     */
     @VisibleForTesting
-    void writeHistogramPDF(final String inputFileName) throws IOException{
-
-        if(0.0 == maxMADTolerance){
-            throw new IOException("MAD tolerance for histogram set to 0, no plot to generate.");
-        }
+    void writeHistogramPDF(final String inputFileName) throws IOException, RScriptExecutorException {
 
         final File histogramPlotPDF = new File(histogramPlotFile);
         IOUtil.assertFileIsWritable(histogramPlotPDF);

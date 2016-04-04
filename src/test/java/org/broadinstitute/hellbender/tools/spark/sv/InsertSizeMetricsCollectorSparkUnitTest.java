@@ -14,7 +14,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 /**
- * Some tests for testing several of the utility functions used in InsertSizeMetricsCollectorSpark.
+ * Testing several of the utility functions defined and used in InsertSizeMetricsCollectorSpark.
  */
 public final class InsertSizeMetricsCollectorSparkUnitTest {
 
@@ -24,7 +24,7 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
      *     {36 36 36 38 38 40 41 41 41 41 44 44 45} with median == 40.
      */
     @Test(groups = "sv")
-    public void testRanges1() throws Exception {
+    public void testRanges() throws Exception {
 
         final Map<Integer, Long> map = new TreeMap<>();
         map.put(36, 3L);
@@ -51,7 +51,7 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
                                              Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
                                              Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>)
      * Test case: 1 sample, 2 libraries
-     *            3 read groups, 2 belonging to 1 library, 1 belonging to another
+     *            3 read groups, 2 belonging to 1 library, 1 belonging to the other
      * @throws Exception
      */
     @Test(groups = "sv")
@@ -151,7 +151,7 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
      * @throws Exception
      */
     @Test(groups = "sv")
-    public void testHisttoHTSJDKHistogramConverter() throws Exception{
+    public void testSortedMapToHTSJDKHistogramConverter() throws Exception{
 
         final InsertSizeMetricsCollectorSpark.GroupMetaInfo testGroup = new InsertSizeMetricsCollectorSpark.GroupMetaInfo("sample", "library", "readGroup", MetricAccumulationLevel.READ_GROUP);
         final SortedMap<Integer, Long> hist = new TreeMap<>();

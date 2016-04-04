@@ -22,6 +22,7 @@ import java.io.Serializable;
 /**
  * Worker class to collect insert size metrics, add metrics to file, and provides accessors to stats of groups of different level.
  * TODO: is it desired that mapping quality is collected as well?
+ * TODO: consider refactoring code for other metric collection usages
  */
 public final class InsertSizeMetricsCollectorSpark implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -33,8 +34,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     private Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsOfAllReads   = null;
 
     /**
-     * The constructor for the class where actual work of collection insert size statistics at the requested levels
-     *   are delegated to utility functions.
+     * Constructor; also acts as driver for organizing workflow.
      *
      * @param filteredReads         reads that pass filters
      * @param header                header in the input
@@ -49,9 +49,8 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         /* General strategy:
            construct untrimmed hand rolled "histogram" (SortedMap) of all read groups in three steps,
              because htsjdk Histogram does not play well with Serialization
-           so first hand roll a histogram using Spark (read traversal is the bottleneck in terms of performance),
-             when computing corresponding InsertSizeMetrics locally, use htsjdk Histogram constructed from the SortedMap
-             version to do the work*/
+           so first hand roll a histogram at the read-group level during the 1-pass all reads traversal on Spark.
+           when computing InsertSizeMetrics, first convert the SortedMap version histogram to htsjdk Histogram, then compute metrics.*/
 
         final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfReadGroups = filteredReads.mapToPair(read -> traverseReadsToExtractInfo(read, header))
                                                                                                                                    .groupByKey()
@@ -59,7 +58,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
                                                                                                                                    .mapToPair(InsertSizeMetricsCollectorSpark::constructHistogramFromList)
                                                                                                                                    .collectAsMap();
 
-        // accumulate for higher levels
+        // accumulate for higher levels, if so desired
         Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfLibraries = accumLevels.contains(MetricAccumulationLevel.LIBRARY  ) ? new HashMap<>() : null;
         Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfSamples   = accumLevels.contains(MetricAccumulationLevel.SAMPLE   ) ? new HashMap<>() : null;
         Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfAllReads  = accumLevels.contains(MetricAccumulationLevel.ALL_READS) ? new HashMap<>() : null;
@@ -89,6 +88,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
      * Utility getter for retrieving stats info for a particular group, given its name.
      * Stats info returned are organized by pair orientations.
      * If a particular pair orientation is unavailable (i.e. no reads of this group has pairs of that orientation), it is not returned.
+     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
      * @param groupName  String representation of the group's name/id, whose stats information is requested.
      * @return           the requested group's stats information, organized by pair orientations
      * @throws           IllegalArgumentException
@@ -140,6 +140,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
      * Utility getter for retrieving InsertSizeMetrics of a particular group, given its name and level.
      * Stats info returned are organized by pair orientations.
      * If a particular pair orientation is unavailable (i.e. no reads of this group has pairs of that orientation), it is not returned.
+     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
      * @param groupName String representation of the group's name/id, whose InsertSizeMetrics is requested.
      * @return          the requested group's InsertSizeMetrics information, organized by pair orientations
      * @throws IllegalArgumentException
@@ -159,9 +160,11 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     /**
      * Utility getter for retrieving InsertSizeMetrics of a particular group, given its name and requested orientation of the pairs.
      * If no valid read pairs are available in this particular group of the requested orientation, returns null.
+     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
      * @param groupName   String representation of the group's name/id, whose InsertSizeMetrics information is requested.
      * @param orientation Requested orientation.
      * @return            InsertSizeMetrics of the requested group, of the requested orientation (could be null if no reads available)
+     * @throws IllegalArgumentException
      */
     public InsertSizeMetrics getMetricsByGroupNameAndOrientation(final String groupName,
                                                                  final MetricAccumulationLevel level,
@@ -171,7 +174,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     }
 
     /**
-     * Using histograms at the read group level to construct histograms at higher level.
+     * Using histograms at the read group level to construct histograms at higher levels.
      * @param unsortedHistogramsAtRGLevel  histograms of read groups
      * @param histOfLibraries              destination where histograms of libraries should be put, null if not requested
      * @param histOfSamples                destination where histograms of samples   should be put, null if not requested
@@ -183,24 +186,27 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
                                            Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfSamples,
                                            Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfAllReads){
 
-        final List<Tuple2<ReadGroupParentExtractor,
-                          Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>>> extractors = new ArrayList<>();
-        if(null!=histOfLibraries) {
-            extractors.add( new Tuple2<>(new ReadGroupLibraryExtractor(), histOfLibraries));
-        }
-        if(null!=histOfSamples) {
-            extractors.add( new Tuple2<>(new ReadGroupSampleExtractor(), histOfSamples));
-        }
-        if(null!=histOfAllReads) {
-            extractors.add( new Tuple2<>(new ReadGroupAllReadsExtractor(), histOfAllReads));
-        }
-        for(final GroupMetaInfo groupMetaInfo : unsortedHistogramsAtRGLevel.keySet()){
-            final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> readGroupHistograms = unsortedHistogramsAtRGLevel.get(groupMetaInfo);
-            for(final Tuple2<ReadGroupParentExtractor,
-                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor : extractors){
-                distributeRGHistogramsToAppropriateLevel(groupMetaInfo, readGroupHistograms, extractor);
-            }
-        }
+         final List<Tuple2<ReadGroupParentExtractor,
+                           Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>>> extractors = new ArrayList<>();
+
+         if(null!=histOfLibraries) {
+             extractors.add( new Tuple2<>(new ReadGroupLibraryExtractor(), histOfLibraries));
+         }
+         if(null!=histOfSamples) {
+             extractors.add( new Tuple2<>(new ReadGroupSampleExtractor(), histOfSamples));
+         }
+         if(null!=histOfAllReads) {
+             extractors.add( new Tuple2<>(new ReadGroupAllReadsExtractor(), histOfAllReads));
+         }
+         if(0==extractors.size()) { return; }
+
+         for(final GroupMetaInfo groupMetaInfo : unsortedHistogramsAtRGLevel.keySet()){
+             final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> readGroupHistograms = unsortedHistogramsAtRGLevel.get(groupMetaInfo);
+             for(final Tuple2<ReadGroupParentExtractor,
+                              Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor : extractors){
+                 distributeRGHistogramsToAppropriateLevel(groupMetaInfo, readGroupHistograms, extractor);
+             }
+         }
     }
 
     /** Distributes a particular read group's histogram to its "parent" library/sample or all reads if requested.
@@ -234,16 +240,17 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         }
     }
 
+    // functor to extract meta-information on a read group's "parent" (eg. library, sample) group
     private interface ReadGroupParentExtractor{
         GroupMetaInfo extractParentGroupMetaInfo(final GroupMetaInfo groupMetaInfo);
     }
 
     private static final class ReadGroupAllReadsExtractor implements ReadGroupParentExtractor{
 
-        private static final GroupMetaInfo GROUP_META_INFO = new GroupMetaInfo(null, null, null, MetricAccumulationLevel.ALL_READS);
+        private static final GroupMetaInfo ALLREADS_META_INFO = new GroupMetaInfo(null, null, null, MetricAccumulationLevel.ALL_READS);
 
         public GroupMetaInfo extractParentGroupMetaInfo(final GroupMetaInfo readGroupMetaInfo){
-            return GROUP_META_INFO;
+            return ALLREADS_META_INFO;
         }
     }
 
@@ -369,7 +376,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     private static void trimHTSHistogramAndSetMean(Histogram<Integer> htsHist, InsertSizeMetrics metrics, final double histogramMADTolerance){
         htsHist.trimByWidth( (int)(metrics.MEDIAN_INSERT_SIZE + histogramMADTolerance*metrics.MEDIAN_ABSOLUTE_DEVIATION) );
         metrics.MEAN_INSERT_SIZE   = htsHist.getMean();
-        if(1==htsHist.getCount()){ // extremely unlikely in reality, but may be true at read group level when running tests
+        if(1==htsHist.getCount()){ // extremely unlikely in reality, but may be true when running tests
             metrics.STANDARD_DEVIATION = 0.0;
         }else{
             metrics.STANDARD_DEVIATION = htsHist.getStandardDeviation();
@@ -463,6 +470,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         public final String readGroup;
         public final MetricAccumulationLevel level;
 
+        // Intellij-generated code
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
@@ -477,7 +485,8 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
 
         }
 
-        @Override
+        // Intellij-generated code
+        // @Override
         public int hashCode() {
             int result = sample != null ? sample.hashCode() : 0;
             result = 31 * result + (library != null ? library.hashCode() : 0);
