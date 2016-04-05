@@ -1,27 +1,24 @@
 package org.broadinstitute.hellbender.tools.spark.sv;
 
+import com.google.common.annotations.VisibleForTesting;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.List;
 
 public abstract class CMDLineProgramModule {
 
-    private static final String programName = null;
-
-    private final String moduleName = null;
-
     public CMDLineProgramModule(){  }
 
-    abstract List<String> buildCommands();
+    abstract List<String> initializeCommands() throws IOException;
 
     public void run(final String[] runtimeArguments, final File directoryToWorkIn, final File stdoutDestination) throws IOException, InterruptedException, RuntimeException{
 
-        final List<String> commands = buildCommands();
-        for(final String arg : runtimeArguments){
-            commands.add(arg);
-        }
+        final List<String> commands = initializeCommands();
+        for(final String arg : runtimeArguments){ commands.add(arg); }
 
         final ProcessBuilder builder = new ProcessBuilder(commands);
         setupEnvironment(builder, directoryToWorkIn, stdoutDestination);
@@ -63,5 +60,22 @@ public abstract class CMDLineProgramModule {
         errorMessage += "\n" + commandMessage;
         throw new RuntimeException("Errors occurred while running: " + errorMessage +
                                     "\nWith exit status: " + commandExitStatus);
+    }
+
+    @VisibleForTesting
+    static void checkIfProgramIsAvailableOnHost(final String programName) throws IOException{
+        try{
+            final List<String> commands = new ArrayList<>();
+            commands.add("which");
+            commands.add(programName);
+            final ProcessBuilder testIfProgramIsAvailableOnHost = new ProcessBuilder(commands);
+            final Process programPath = testIfProgramIsAvailableOnHost.start();
+            int exitStatus = programPath.waitFor();
+            if(0!=exitStatus){
+                throw new IOException("Can't find " + programName + " programs in $PATH of host.");
+            }
+        } catch(final InterruptedException e){
+            throw new IOException("Errors occurred while testing where " + programName + " lives. " + e.getMessage());
+        }
     }
 }

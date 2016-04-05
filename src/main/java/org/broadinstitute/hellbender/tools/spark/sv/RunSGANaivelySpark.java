@@ -88,25 +88,6 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
         }
     }
 
-    @VisibleForTesting
-    static int checkIfProgramIsAvailableOnHost(final String programName){
-        try{
-            final List<String> commands = new ArrayList<>();
-            commands.add("which");
-            commands.add(programName);
-            final ProcessBuilder testIfProgramIsAvailableOnHost = new ProcessBuilder(commands);
-            final Process programPath = testIfProgramIsAvailableOnHost.start();
-            int exitStatus = programPath.waitFor();
-            if(0!=exitStatus){
-                throw new InterruptedException();
-            }
-        } catch(final Exception e){
-            System.err.println("Can't find " + programName + " programs in $PATH of host. Quit. \n" + e.getMessage());
-            return 1;
-        }
-        return 0;
-    }
-
     /**
      * Converts an entry in an JavaPairRDD whose first is an breakpoint id and second is an iterable of paired reads
      *    where either end is "mapped" (which ever way the read picker think mapping means) to a place near
@@ -172,7 +153,8 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
         return new Tuple2<>(fastqFilesForEachBreakPoint._1(), assembledContigsFile);
     }
 
-    private static File SGASerialRunner(final File rawFASTQ, final int threads, final boolean runCorrections) throws IOException, InterruptedException, RuntimeException{
+    @VisibleForTesting
+    static File SGASerialRunner(final File rawFASTQ, final int threads, final boolean runCorrections) throws IOException, InterruptedException, RuntimeException{
 
         int threadsToUse = threads;
         if( System.getProperty("os.name").toLowerCase().contains("mac") && threads>1){ // TODO: is this the right way to check OS?
@@ -307,14 +289,14 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
     @VisibleForTesting
     static Tuple2<Long, File> alignToRef(final Tuple2<Long, File> contigsFiles, final Path pathToReference) throws IOException, InterruptedException, RuntimeException{
 
-        final BWAModule bwa = new BWAModule("mem");
+        final BWAMEMModule bwamem = new BWAMEMModule();
         final String[] bwaArgs = {"-M", "-S", "-P",
                                   pathToReference.toString(),
                                   contigsFiles._2().getName()};
 
         final File bamFile = new File(contigsFiles._2().getParentFile(), extractBaseNameWithoutExtension(contigsFiles._2()) + ".bam");
 
-        bwa.run(bwaArgs, contigsFiles._2().getParentFile(), bamFile);
+        bwamem.run(bwaArgs, contigsFiles._2().getParentFile(), bamFile);
         return new Tuple2<>(contigsFiles._1(), bamFile);
     }
 

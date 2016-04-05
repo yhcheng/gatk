@@ -1,10 +1,11 @@
 package org.broadinstitute.hellbender.tools.spark.sv;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Represents an SGA module that can be called via "run" to do actual work.
+ * Represents an SGA module that can be called via "run" (in base) to do actual work.
  */
 public final class SGAModule extends CMDLineProgramModule{
 
@@ -17,8 +18,9 @@ public final class SGAModule extends CMDLineProgramModule{
     }
 
     @Override
-    public List<String> buildCommands(){
-        List<String> res = new ArrayList<>();
+    public List<String> initializeCommands() throws IOException {
+        checkIfProgramIsAvailableOnHost(programName);
+        final List<String> res = new ArrayList<>();
         res.add(programName);
         res.add(moduleName);
         return res;
