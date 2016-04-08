@@ -10,9 +10,10 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public class IntervalsSkipListOneContigUnitTest extends BaseTest {
+public final class IntervalsSkipListOneContigUnitTest extends BaseTest {
 
 
     @DataProvider(name="intervals")
@@ -76,7 +77,7 @@ public class IntervalsSkipListOneContigUnitTest extends BaseTest {
     @Test(dataProvider = "intervals")
     public void testOverlap(ArrayList<Locatable> input, SimpleInterval query, ArrayList<Locatable> expected) throws Exception {
         IntervalsSkipListOneContig<Locatable> ints = new IntervalsSkipListOneContig<>(input);
-        ArrayList<Locatable> actual = ints.getOverlapping(query);
+        List<Locatable> actual = ints.getOverlapping(query);
         Assert.assertEquals(
                 actual,
                 expected
@@ -99,7 +100,7 @@ public class IntervalsSkipListOneContigUnitTest extends BaseTest {
         Stopwatch v1 = Stopwatch.createStarted();
         for (int start = 101; start<MAX; start += 5000) {
             SimpleInterval interval = new SimpleInterval("1", start + 10, start + 11);
-            ArrayList<Locatable> actual = ints.getOverlappingIgnoringIndex(interval);
+            List<Locatable> actual = ints.getOverlappingIgnoringIndex(interval);
             Assert.assertEquals(actual.size(), 3);
             // the two that start from "start", plus the long one that starts from start-100.
             // the one that starts from start-200 ends before our test point.
@@ -111,7 +112,7 @@ public class IntervalsSkipListOneContigUnitTest extends BaseTest {
         Stopwatch v2 = Stopwatch.createStarted();
         for (int start = 101; start<MAX; start += 5000) {
             SimpleInterval interval = new SimpleInterval("1", start + 10, start + 11);
-            ArrayList<Locatable> actual = ints.getOverlapping(interval);
+            List<Locatable> actual = ints.getOverlapping(interval);
             Assert.assertEquals(actual.size(), 3);
             // the two that start from "start", plus the long one that starts from start-100.
             // the one that starts from start-200 ends before our test point.
