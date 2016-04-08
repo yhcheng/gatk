@@ -5,6 +5,7 @@ import htsjdk.samtools.SamPairUtil;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.util.Histogram;
+import org.broadinstitute.hellbender.metrics.MetricsUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.metrics.MetricAccumulationLevel;
 import org.broadinstitute.hellbender.tools.picard.analysis.InsertSizeMetrics;
@@ -13,6 +14,7 @@ import org.apache.spark.api.java.JavaRDD;
 
 import scala.Tuple2;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.StreamSupport;
@@ -27,12 +29,6 @@ import java.io.Serializable;
 public final class InsertSizeMetricsCollectorSpark implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    // stats are null if not requested to be collected
-    private Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsOfReadGroups = null;
-    private Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsOfLibraries  = null;
-    private Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsOfSamples    = null;
-    private Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsOfAllReads   = null;
-
     /**
      * Constructor; also acts as driver for organizing workflow.
      *
@@ -40,11 +36,13 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
      * @param header                header in the input
      * @param accumLevels           accumulation level {ALL_READS, SAMPLE, LIBRARY, READ_GROUP}
      * @param histogramMADTolerance MAD tolerance when producing histogram plot
+     * @param metricsFile           metrics file to write InsertMetrics to
      */
     public InsertSizeMetricsCollectorSpark(final JavaRDD<GATKRead> filteredReads,
                                            final SAMFileHeader header,
                                            final Set<MetricAccumulationLevel> accumLevels,
-                                           final double histogramMADTolerance) {
+                                           final double histogramMADTolerance,
+                                           final MetricsFile<InsertSizeMetrics, Integer> metricsFile) {
 
         /* General strategy:
            construct untrimmed hand rolled "histogram" (SortedMap) of all read groups in three steps,
@@ -58,155 +56,53 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
                                                                                                                                    .mapToPair(InsertSizeMetricsCollectorSpark::constructHistogramFromList)
                                                                                                                                    .collectAsMap();
 
+        // a list, of the same size as the number of distinct levels requested,
+        // each entry in the list represents a level, and the entry is a map from the group's meta info to its metrics info
         // accumulate for higher levels, if so desired
-        Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfLibraries = accumLevels.contains(MetricAccumulationLevel.LIBRARY  ) ? new HashMap<>() : null;
-        Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfSamples   = accumLevels.contains(MetricAccumulationLevel.SAMPLE   ) ? new HashMap<>() : null;
-        Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfAllReads  = accumLevels.contains(MetricAccumulationLevel.ALL_READS) ? new HashMap<>() : null;
-        aggregateHistograms(histogramsOfReadGroups, histogramsOfLibraries, histogramsOfSamples, histogramsOfAllReads);
+        final ArrayList<Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> listOfHistograms = aggregateHistograms(histogramsOfReadGroups, accumLevels);
+        final ArrayList<Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>>> listOfStats = new ArrayList<>();
+        for(int i=0; i<accumLevels.size(); ++i){ listOfStats.add(new HashMap<>()); }
 
         // convert to htsjdk Histogram and compute metrics
-        if(accumLevels.contains(MetricAccumulationLevel.READ_GROUP)) {
-            statsOfReadGroups  = new HashMap<>();
-            convertSortedMapToHTSHistogram(histogramsOfReadGroups, statsOfReadGroups, histogramMADTolerance);
-        }
+        for(int i=0; i<accumLevels.size(); ++i){ convertSortedMapToHTSHistogram(listOfHistograms.get(i), listOfStats.get(i), histogramMADTolerance); }
 
-        if(accumLevels.contains(MetricAccumulationLevel.LIBRARY)) {
-            statsOfLibraries  = new HashMap<>();
-            convertSortedMapToHTSHistogram(histogramsOfLibraries, statsOfLibraries, histogramMADTolerance);
-        }
-        if(accumLevels.contains(MetricAccumulationLevel.SAMPLE)) {
-            statsOfSamples    = new HashMap<>();
-            convertSortedMapToHTSHistogram(histogramsOfSamples, statsOfLibraries, histogramMADTolerance);
-        }
-        if(accumLevels.contains(MetricAccumulationLevel.ALL_READS)) {
-            statsOfAllReads   = new HashMap<>();
-            convertSortedMapToHTSHistogram(histogramsOfAllReads, statsOfAllReads, histogramMADTolerance);
-        }
-    }
-
-    /**
-     * Utility getter for retrieving stats info for a particular group, given its name.
-     * Stats info returned are organized by pair orientations.
-     * If a particular pair orientation is unavailable (i.e. no reads of this group has pairs of that orientation), it is not returned.
-     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
-     * @param groupName  String representation of the group's name/id, whose stats information is requested.
-     * @return           the requested group's stats information, organized by pair orientations
-     * @throws           IllegalArgumentException
-     */
-    public Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>> getHistogramsAndMetrics(final String groupName,
-                                                                                                                   final MetricAccumulationLevel level)
-            throws IllegalArgumentException {
-
-        Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>> result = null;
-        switch (level){
-            case ALL_READS:
-                result = statsOfAllReads.get(new GroupMetaInfo(null, null, null, MetricAccumulationLevel.ALL_READS));
-            break;
-            case SAMPLE:
-                for(final GroupMetaInfo groupMetaInfo : statsOfSamples.keySet()){
-                    if(groupMetaInfo.sample.equals(groupName)) {
-                        result = statsOfSamples.get(groupMetaInfo);
-                        break;
-                    }
-                }
-                break;
-            case LIBRARY:
-                for(final GroupMetaInfo groupMetaInfo : statsOfLibraries.keySet()){
-                    if(groupMetaInfo.library.equals(groupName)) {
-                        result = statsOfLibraries.get(groupMetaInfo);
-                        break;
-                    }
-                }
-                break;
-            case READ_GROUP:
-                for(final GroupMetaInfo groupMetaInfo : statsOfReadGroups.keySet()){
-                    if(groupMetaInfo.readGroup.equals(groupName)) {
-                        result = statsOfReadGroups.get(groupMetaInfo);
-                        break;
-                    }
-                }
-                break;
-        }
-
-        if(null==result){
-            throw new IllegalArgumentException("No group has the requested group name at the requested level." +
-                                                groupName + "\t" + level.toString());
-        }
-
-        return result;
-    }
-
-    /**
-     * Utility getter for retrieving InsertSizeMetrics of a particular group, given its name and level.
-     * Stats info returned are organized by pair orientations.
-     * If a particular pair orientation is unavailable (i.e. no reads of this group has pairs of that orientation), it is not returned.
-     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
-     * @param groupName String representation of the group's name/id, whose InsertSizeMetrics is requested.
-     * @return          the requested group's InsertSizeMetrics information, organized by pair orientations
-     * @throws IllegalArgumentException
-     */
-    public Map<SamPairUtil.PairOrientation, InsertSizeMetrics> getMetrics(final String groupName,
-                                                                          final MetricAccumulationLevel level)
-            throws IllegalArgumentException {
-
-        final Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>> histogramAndMetrics = getHistogramsAndMetrics(groupName, level);
-        final Map<SamPairUtil.PairOrientation, InsertSizeMetrics> metricsOnly = new HashMap<>();
-        for(SamPairUtil.PairOrientation orientation : histogramAndMetrics.keySet()){
-            metricsOnly.put(orientation, histogramAndMetrics.get(orientation)._2());
-        }
-        return metricsOnly;
-    }
-
-    /**
-     * Utility getter for retrieving InsertSizeMetrics of a particular group, given its name and requested orientation of the pairs.
-     * If no valid read pairs are available in this particular group of the requested orientation, returns null.
-     * Throws IllegalArgumentException if the requested groupName doesn't exist at the requested level.
-     * @param groupName   String representation of the group's name/id, whose InsertSizeMetrics information is requested.
-     * @param orientation Requested orientation.
-     * @return            InsertSizeMetrics of the requested group, of the requested orientation (could be null if no reads available)
-     * @throws IllegalArgumentException
-     */
-    public InsertSizeMetrics getMetricsByGroupNameAndOrientation(final String groupName,
-                                                                 final MetricAccumulationLevel level,
-                                                                 final SamPairUtil.PairOrientation orientation)
-            throws IllegalArgumentException {
-        return getMetrics(groupName, level).get(orientation);
+        for(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> statsInfo : listOfStats) { dumpToFile(metricsFile, statsInfo); }
     }
 
     /**
      * Using histograms at the read group level to construct histograms at higher levels.
-     * @param unsortedHistogramsAtRGLevel  histograms of read groups
-     * @param histOfLibraries              destination where histograms of libraries should be put, null if not requested
-     * @param histOfSamples                destination where histograms of samples   should be put, null if not requested
-     * @param histOfAllReads               destination where histograms of all reads should be put, null if not requested
+     * @param histogramsAtRGLevel   histograms of read groups
+     * @param accumLevels           accumulation level {ALL_READS, SAMPLE, LIBRARY, READ_GROUP}
+     * @return                      a list of histograms, where each entry in the list--a map from group into to its histograms--represents one level
      */
-     @VisibleForTesting
-     static void aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> unsortedHistogramsAtRGLevel,
-                                           Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfLibraries,
-                                           Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfSamples,
-                                           Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histOfAllReads){
+    @VisibleForTesting
+    static ArrayList<Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsAtRGLevel,
+                                                                                                                         final Set<MetricAccumulationLevel> accumLevels){
 
-         final List<Tuple2<ReadGroupParentExtractor,
-                           Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>>> extractors = new ArrayList<>();
+        final List<Tuple2<ReadGroupParentExtractor,
+                          Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>>> extractors = new ArrayList<>();
 
-         if(null!=histOfLibraries) {
-             extractors.add( new Tuple2<>(new ReadGroupLibraryExtractor(), histOfLibraries));
-         }
-         if(null!=histOfSamples) {
-             extractors.add( new Tuple2<>(new ReadGroupSampleExtractor(), histOfSamples));
-         }
-         if(null!=histOfAllReads) {
-             extractors.add( new Tuple2<>(new ReadGroupAllReadsExtractor(), histOfAllReads));
-         }
-         if(0==extractors.size()) { return; }
+        if(accumLevels.contains(MetricAccumulationLevel.LIBRARY))   { extractors.add( new Tuple2<>(new ReadGroupLibraryExtractor(),  new HashMap<>())); }
+        if(accumLevels.contains(MetricAccumulationLevel.SAMPLE))    { extractors.add( new Tuple2<>(new ReadGroupSampleExtractor(),   new HashMap<>())); }
+        if(accumLevels.contains(MetricAccumulationLevel.ALL_READS)) { extractors.add( new Tuple2<>(new ReadGroupAllReadsExtractor(), new HashMap<>())); }
 
-         for(final GroupMetaInfo groupMetaInfo : unsortedHistogramsAtRGLevel.keySet()){
-             final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> readGroupHistograms = unsortedHistogramsAtRGLevel.get(groupMetaInfo);
-             for(final Tuple2<ReadGroupParentExtractor,
-                              Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor : extractors){
-                 distributeRGHistogramsToAppropriateLevel(groupMetaInfo, readGroupHistograms, extractor);
-             }
-         }
+        for(final GroupMetaInfo groupMetaInfo : histogramsAtRGLevel.keySet()){
+            final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> readGroupHistograms = histogramsAtRGLevel.get(groupMetaInfo);
+            for(final Tuple2<ReadGroupParentExtractor,
+                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor : extractors){
+                distributeRGHistogramsToAppropriateLevel(groupMetaInfo, readGroupHistograms, extractor);
+            }
+        }
+
+        final ArrayList<Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> listOfHistograms = new ArrayList<>();
+
+        if(accumLevels.contains(MetricAccumulationLevel.READ_GROUP)){ listOfHistograms.add(histogramsAtRGLevel); }
+
+        for(final Tuple2<ReadGroupParentExtractor,
+                         Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor : extractors){
+            listOfHistograms.add(extractor._2());
+        }
+        return listOfHistograms;
     }
 
     /** Distributes a particular read group's histogram to its "parent" library/sample or all reads if requested.
@@ -218,10 +114,10 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     @VisibleForTesting
     static void distributeRGHistogramsToAppropriateLevel(final GroupMetaInfo readGroupMetaInfo,
                                                          final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> readGroupHistograms,
-                                                         Tuple2<ReadGroupParentExtractor, Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor){
+                                                         final Tuple2<ReadGroupParentExtractor, Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> extractor){
 
         final GroupMetaInfo correspondingHigherLevelGroup = extractor._1().extractParentGroupMetaInfo(readGroupMetaInfo);
-        Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> destination = extractor._2();
+        final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> destination = extractor._2();
 
         // three checks: first check if this higher level group has been seen yet.
         destination.putIfAbsent(correspondingHigherLevelGroup, new HashMap<>());
@@ -229,7 +125,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
 
         for(final SamPairUtil.PairOrientation orientation : readGroupHistograms.keySet()){
             higherLevelHistograms.putIfAbsent(orientation, new TreeMap<>()); // second check if this orientation has been seen yet.
-            SortedMap<Integer, Long> higherLevelHistogramOfThisOrientation = higherLevelHistograms.get(orientation);
+            final SortedMap<Integer, Long> higherLevelHistogramOfThisOrientation = higherLevelHistograms.get(orientation);
             final SortedMap<Integer, Long> readGroupHistogramOfThisOrientation = readGroupHistograms.get(orientation);
             for(final Integer bin : readGroupHistogramOfThisOrientation.keySet()){
                 higherLevelHistogramOfThisOrientation.putIfAbsent(bin, 0L); // third check if this bin has been seen yet.
@@ -281,7 +177,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
             final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> rawHistogramsOfAGroup = rawHistograms.get(groupMetaInfo);
             for(final SamPairUtil.PairOrientation orientation : rawHistogramsOfAGroup.keySet()){
                 // convert to htsjdk Histogram
-                final Histogram<Integer> htsHist = new Histogram<>("insert_size", getGroupName(groupMetaInfo) + "." + orientationToString(orientation) + "_count");
+                final Histogram<Integer> htsHist = new Histogram<>("insert_size", groupMetaInfo.getGroupName() + "." + orientationToString(orientation) + "_count");
                 final SortedMap<Integer, Long> hist = rawHistogramsOfAGroup.get(orientation);
                 for(final int size : hist.keySet()){
                     htsHist.increment(size, hist.get(size));
@@ -334,7 +230,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         metrics.WIDTH_OF_99_PERCENT = (int) bin_widths[9];
     }
 
-    // Computes with of symmetrical bins around the histogram's median
+    // Computes width of symmetrical bins around the histogram's median
     @VisibleForTesting
     @SuppressWarnings("unchecked") // suppress warning on type inference when calling hist.get(int)
     static long[] computeRanges(final Histogram<Integer> hist, final int start, final double totalCount){
@@ -344,7 +240,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         int left = start;  // left and right boundaries of histogram bins
         int right = left;  //      start from median, and gradually open up
 
-        long bin_widths[] = new long[10];   // for storing distance between left and right boundaries of histogram bins
+        final long bin_widths[] = new long[10];   // for storing distance between left and right boundaries of histogram bins
         // dimension is 10 because metrics requires 10 histogram bin width values.
         int i = 0;
         int j = 0;                          // represent lowest and highest indices of bin_widths that needs to be updated
@@ -383,26 +279,6 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         }
     }
 
-    // small utility function to decide what group name to use in the corresponding htsjdk Histogram title/ctor.
-    private static String getGroupName(final GroupMetaInfo groupMetaInfo){
-        String groupName = null;
-        switch (groupMetaInfo.level){
-            case ALL_READS:
-                groupName = "All_reads";
-                break;
-            case SAMPLE:
-                groupName = groupMetaInfo.sample;
-                break;
-            case LIBRARY:
-                groupName = groupMetaInfo.library;
-                break;
-            case READ_GROUP:
-                groupName = groupMetaInfo.readGroup;
-                break;
-        }
-        return groupName;
-    }
-
     private static String orientationToString(final SamPairUtil.PairOrientation orientation){
         return orientation.equals(SamPairUtil.PairOrientation.FR) ? "fr" : (orientation.equals(SamPairUtil.PairOrientation.RF) ? "rf" : "tandem");
     }
@@ -435,18 +311,9 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
     }
 
     /**
-     * Write metrics and histograms to file, with an order such that coarser level information appear in the file before
-     *   finer levels.
+     * Write metrics and histograms to flat file, with an order such that coarser level information appear in the file before finer levels.
      * @param metricsFile File to write information to.
      */
-    public void produceMetricsFile(final MetricsFile<InsertSizeMetrics, Integer> metricsFile) {
-
-        if(null!=statsOfAllReads)   { dumpToFile(metricsFile, statsOfAllReads);   }
-        if(null!=statsOfSamples)    { dumpToFile(metricsFile, statsOfSamples);    }
-        if(null!=statsOfLibraries)  { dumpToFile(metricsFile, statsOfLibraries);  }
-        if(null!=statsOfReadGroups) { dumpToFile(metricsFile, statsOfReadGroups); }
-    }
-
     private static void dumpToFile(final MetricsFile<InsertSizeMetrics, Integer> metricsFile,
                                    final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, Tuple2<Histogram<Integer>, InsertSizeMetrics>>> stats){
         for(final GroupMetaInfo groupMetaInfo : stats.keySet()){
@@ -486,7 +353,7 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
         }
 
         // Intellij-generated code
-        // @Override
+        @Override
         public int hashCode() {
             int result = sample != null ? sample.hashCode() : 0;
             result = 31 * result + (library != null ? library.hashCode() : 0);
@@ -507,6 +374,28 @@ public final class InsertSizeMetricsCollectorSpark implements Serializable {
             this.library   = library;
             this.readGroup = readGroup;
             this.level     = level;
+        }
+
+        /**
+         * small utility function to decide what group name to use in the corresponding htsjdk Histogram title/ctor.
+         */
+        public String getGroupName(){
+            String groupName = null;
+            switch (this.level){
+                case ALL_READS:
+                    groupName = "All_reads";
+                    break;
+                case SAMPLE:
+                    groupName = this.sample;
+                    break;
+                case LIBRARY:
+                    groupName = this.library;
+                    break;
+                case READ_GROUP:
+                    groupName = this.readGroup;
+                    break;
+            }
+            return groupName;
         }
     }
 }

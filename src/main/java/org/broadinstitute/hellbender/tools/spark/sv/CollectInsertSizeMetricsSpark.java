@@ -13,7 +13,9 @@ import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariationSp
 import org.broadinstitute.hellbender.engine.filters.AlignmentAgreesWithHeaderReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
+import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.metrics.MetricsUtils;
 import org.broadinstitute.hellbender.metrics.MetricAccumulationLevel;
 import org.broadinstitute.hellbender.tools.picard.analysis.InsertSizeMetrics;
@@ -90,13 +92,6 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
               optional = true)
     public int MQPassingThreshold = 0;
 
-    @Argument(doc = "If set to non-zero value, only include reads with a mate mapping quality greater than the given value." +
-                    "If set to zero, reads will not be filtered based mate mapping quality",
-              shortName = "MQ",
-              fullName = "MQThreshold",
-              optional = true)
-    public int mateMQPassingThreshold = 0;
-
     @Argument(doc="The level(s) at which to accumulate metrics. Possible values are {ALL_READS, SAMPLE, LIBRARY, READ GROUP}.",
               shortName="LEVEL",
               fullName = "MetricsAccumulationLevel",
@@ -138,24 +133,20 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
 
         final JavaRDD<GATKRead> filteredReads = getReads();
 
+        if(filteredReads.isEmpty()) {throw new GATKException("No valid reads found in input file."); }
+
         final SAMFileHeader readsHeader = getHeaderForReads();
-        final String inputFileName = getReadSourceName();
+
+        final MetricsFile<InsertSizeMetrics, Integer> metricsFile = getMetricsFile();
 
         final InsertSizeMetricsCollectorSpark collector = new InsertSizeMetricsCollectorSpark(filteredReads,
                                                                                               readsHeader,
                                                                                               metricAccumulationLevel,
-                                                                                              maxMADTolerance);
+                                                                                              maxMADTolerance,
+                                                                                              metricsFile);
 
-        try{
-            writeMetricsFile(collector);
-            writeHistogramPDF(inputFileName);
-        } catch (final IOException e){
-            System.err.println("Errors occurred during writing output to file.");
-            System.err.println(e.getMessage());
-        } catch (final RScriptExecutorException e){
-            System.err.println("Errors occurred while generating histogram plots with R script.");
-            System.err.println(e.getMessage());
-        }
+        MetricsUtils.saveMetrics(metricsFile, output, getAuthHolder());
+        writeHistogramPDF();
     }
 
     /**
@@ -165,42 +156,14 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
     @Override
     public ReadFilter makeReadFilter() {
 
-        final AlignmentAgreesWithHeaderReadFilter alignmentAgreesWithHeader = new AlignmentAgreesWithHeaderReadFilter(getHeaderForReads());
+        final SVCustomReadFilter svFilter = new SVCustomReadFilter(useEnd,
+                                                                   filterNonProperlyPairedReads,
+                                                                   !useDuplicateReads,
+                                                                   !useSecondaryAlignments,
+                                                                   !useSupplementaryAlignments,
+                                                                   MQPassingThreshold);
 
-        final PrimaryFilter pfilter = new PrimaryFilter();
-
-        final SVCustomReadFilter sfilter = new SVCustomReadFilter(useEnd,
-                                                                  filterNonProperlyPairedReads,
-                                                                  !useDuplicateReads,
-                                                                  !useSecondaryAlignments,
-                                                                  !useSupplementaryAlignments,
-                                                                  MQPassingThreshold,
-                                                                  mateMQPassingThreshold);
-
-        return alignmentAgreesWithHeader.and(pfilter).and(sfilter);
-    }
-
-    /**
-     * Similar to WellformedReaFilter except doesn't check for header but checks if mapping quality is available.
-     */
-    private static final class PrimaryFilter implements ReadFilter{
-        private static final long serialVersionUID = 1L;
-
-        private final ReadFilter primary = ReadFilterLibrary.PASSES_VENDOR_QUALITY_CHECK
-                                           .and(ReadFilterLibrary.VALID_ALIGNMENT_START)
-                                           .and(ReadFilterLibrary.VALID_ALIGNMENT_END)
-                                           .and(ReadFilterLibrary.HAS_READ_GROUP)
-                                           .and(ReadFilterLibrary.HAS_MATCHING_BASES_AND_QUALS)
-                                           .and(ReadFilterLibrary.READLENGTH_EQUALS_CIGARLENGTH)
-                                           .and(ReadFilterLibrary.SEQ_IS_STORED)
-                                           .and(ReadFilterLibrary.CIGAR_IS_SUPPORTED)
-                                           .and(ReadFilterLibrary.MAPPING_QUALITY_AVAILABLE)
-                                           .and(ReadFilterLibrary.MAPPED);
-
-        @Override
-        public boolean test(final GATKRead read){
-            return primary.test(read) && (!read.mateIsUnmapped());
-        }
+        return new WellformedReadFilter(getHeaderForReads()).and(svFilter);
     }
 
     /**
@@ -216,12 +179,12 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
                                   final boolean filterDuplicatedReads,
                                   final boolean filterSecondaryAlignments,
                                   final boolean filterSupplementaryAlignments,
-                                  final int     MQThreshold,
-                                  final int     mMQThreshold){
+                                  final int     MQThreshold){
 
             final EndToUse endVal = whichEnd;
 
-            ReadFilter tempFilter = read -> 0!=read.getFragmentLength();
+            ReadFilter tempFilter = ReadFilterLibrary.MAPPED;
+                       tempFilter = tempFilter.and(read -> 0!=read.getFragmentLength());
                        tempFilter = tempFilter.and(read -> read.isPaired());
                        tempFilter = tempFilter.and(read -> endVal == (read.isFirstOfPair() ? EndToUse.FIRST : EndToUse.SECOND));
 
@@ -231,7 +194,7 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
             if(filterSupplementaryAlignments) { tempFilter = tempFilter.and(read -> !read.isSupplementaryAlignment());}
 
             if(0!=MQThreshold)  { tempFilter = tempFilter.and(read -> read.getMappingQuality() >= MQThreshold);}
-            if(0!=mMQThreshold) { tempFilter = tempFilter.and(read -> read.getAttributeAsInteger("MQ") >= mMQThreshold);}
+            // if(0!=mMQThreshold) { tempFilter = tempFilter.and(read -> read.getAttributeAsInteger("MQ") >= mMQThreshold);}
 
             combinedReadFilter = tempFilter;
         }
@@ -243,32 +206,11 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
     }
 
     /**
-     * Writes metrics to flat file.
-     * @param collector    Worker class that performs actual metrics collection work.
-     * @throws IOException
-     */
-    @VisibleForTesting
-    void writeMetricsFile(final InsertSizeMetricsCollectorSpark collector) throws IOException {
-
-        final MetricsFile<InsertSizeMetrics, Integer> metricsFile = getMetricsFile();
-
-        collector.produceMetricsFile(metricsFile);
-
-        MetricsUtils.saveMetrics(metricsFile, output, getAuthHolder());
-
-        if (metricsFile.getAllHistograms().isEmpty()) {
-            throw new IOException("No valid reads found in input file.");
-        }
-    }
-
-    /**
      * Calls R script to plot histogram(s) in PDF.
-     * @param inputFileName
-     * @throws IOException
      * @throws RScriptExecutorException
      */
     @VisibleForTesting
-    void writeHistogramPDF(final String inputFileName) throws IOException, RScriptExecutorException {
+    void writeHistogramPDF() throws RScriptExecutorException {
 
         final File histogramPlotPDF = new File(histogramPlotFile);
         IOUtil.assertFileIsWritable(histogramPlotPDF);
@@ -277,7 +219,7 @@ public final class CollectInsertSizeMetricsSpark extends GATKSparkTool {
         executor.addScript(new Resource(R_SCRIPT, CollectInsertSizeMetricsSpark.class));
         executor.addArgs(output,                                // text-based metrics file
                          histogramPlotPDF.getAbsolutePath(),    // PDF graphics file
-                         inputFileName);                        // input bam file
+                         getReadSourceName());                  // input bam file
         executor.exec();
     }
 }

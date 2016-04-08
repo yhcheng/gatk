@@ -5,13 +5,11 @@ import htsjdk.samtools.util.Histogram;
 import org.broadinstitute.hellbender.metrics.MetricAccumulationLevel;
 import org.broadinstitute.hellbender.tools.picard.analysis.InsertSizeMetrics;
 import org.testng.Assert;
+import com.google.common.collect.Sets;
 import org.testng.annotations.Test;
 import scala.Tuple2;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.SortedMap;
-import java.util.TreeMap;
+import java.util.*;
 
 /**
  * Testing several of the utility functions defined and used in InsertSizeMetricsCollectorSpark.
@@ -46,10 +44,8 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
     }
 
     /**
-     * Tests "void aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
-                                             Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>)
+     * Tests "ArrayList<Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> aggregateHistograms(final Map<GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>,
+                                                                                                                            final Set<MetricAccumulationLevel>))
      * Test case: 1 sample, 2 libraries
      *            3 read groups, 2 belonging to 1 library, 1 belonging to the other
      * @throws Exception
@@ -88,10 +84,6 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
                                                                                                                          null,
                                                                                                                          MetricAccumulationLevel.ALL_READS);
 
-        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfLibraries = new HashMap<>();
-        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfSamples   = new HashMap<>();
-        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfAllReads  = new HashMap<>();
-
         final Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>> histogramsOfReadGroup1A = new HashMap<>();
         final SortedMap<Integer, Long> testHist1A = new TreeMap<>();
         testHist1A.put(1,2L);
@@ -114,7 +106,16 @@ public final class InsertSizeMetricsCollectorSparkUnitTest {
         histogramsOfAllTestReadGroups.put(readGroup1B, histogramsOfReadGroup1B);
         histogramsOfAllTestReadGroups.put(readGroup2 , histogramsOfReadGroup2 );
 
-        InsertSizeMetricsCollectorSpark.aggregateHistograms(histogramsOfAllTestReadGroups, histogramsOfLibraries, histogramsOfSamples, histogramsOfAllReads);
+        final Set<MetricAccumulationLevel> accumLevels = Sets.newHashSet(MetricAccumulationLevel.READ_GROUP, MetricAccumulationLevel.LIBRARY, MetricAccumulationLevel.SAMPLE, MetricAccumulationLevel.ALL_READS);
+        final ArrayList<Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>>> listOfResults = InsertSizeMetricsCollectorSpark.aggregateHistograms(histogramsOfAllTestReadGroups, accumLevels);
+
+        int sz = 0;
+        for(final Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> entry : listOfResults) { sz += entry.size(); }
+        Assert.assertEquals(sz, 7);
+
+        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfLibraries = listOfResults.get(1);
+        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfSamples   = listOfResults.get(2);
+        Map<InsertSizeMetricsCollectorSpark.GroupMetaInfo, Map<SamPairUtil.PairOrientation, SortedMap<Integer, Long>>> histogramsOfAllReads  = listOfResults.get(3);
 
         Assert.assertEquals(histogramsOfAllReads.get(allReads).get(SamPairUtil.PairOrientation.FR).get(1), new Long(502L));
         Assert.assertEquals(histogramsOfAllReads.get(allReads).get(SamPairUtil.PairOrientation.FR).get(3), new Long(4L));
