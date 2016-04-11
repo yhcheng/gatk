@@ -14,7 +14,7 @@ import java.io.IOException;
  */
 public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
 
-    private static final File TEST_DATA_DIR = new File(getTestDataDir(), "spark/sv");
+    private static final File TEST_DATA_DIR = new File(getTestDataDir(), "spark/sv/RunMinimalBWAMEM");
 
     @Test(groups="sv")
     public void testSeparate() throws IOException {
@@ -36,7 +36,7 @@ public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
         args.add("-p");
 
         // IO arguments
-        final File input = new File(TEST_DATA_DIR, "RunMinimalBWAMEMTest.fastq");
+        final File input = new File(TEST_DATA_DIR, "interleaved.fastq");
         args.add("-" + StandardArgumentDefinitions.INPUT_SHORT_NAME);
         args.add(input.getAbsolutePath());
 
@@ -49,7 +49,7 @@ public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
         args.add("-" + StandardArgumentDefinitions.OUTPUT_SHORT_NAME);
         args.add(output.getName());
 
-        final File REF = new File(b37_reference_20_21);
+        final File REF = new File("/Users/shuang/Project/HG19Ref/Homo_sapiens_assembly19.fasta");
         args.add("-" + StandardArgumentDefinitions.REFERENCE_SHORT_NAME);
         args.add(REF.getAbsolutePath());
 
