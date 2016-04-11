@@ -40,13 +40,14 @@ public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
         args.add("-" + StandardArgumentDefinitions.INPUT_SHORT_NAME);
         args.add(input.getAbsolutePath());
 
-        final File output = BaseTest.createTempFile("test", ".sam");
-        args.add("-" + StandardArgumentDefinitions.OUTPUT_SHORT_NAME);
-        args.add(output.getAbsolutePath());
-
         final File wkDir = BaseTest.createTempDir("dummy");
         args.add("-" + "outDir");
         args.add(wkDir.getAbsolutePath());
+
+        final File output = new File(wkDir, "test.sam");
+        output.createNewFile();
+        args.add("-" + StandardArgumentDefinitions.OUTPUT_SHORT_NAME);
+        args.add(output.getName());
 
         final File REF = new File(b37_reference_20_21);
         args.add("-" + StandardArgumentDefinitions.REFERENCE_SHORT_NAME);
