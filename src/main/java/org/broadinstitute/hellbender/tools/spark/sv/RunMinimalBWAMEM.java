@@ -115,19 +115,18 @@ public final class RunMinimalBWAMEM extends CommandLineProgram {
 
         if(interLeaved){ // paired reads, interleaved
             args.add("-p");
-            args.add(pathToReference.toString());
-            args.add(pathToInput.toString());
-        }else{
-            if(null!=secondInput){ // paired reads, separate files
-                final Path pathToSecondInput = Paths.get(secondInput);
-                args.add(pathToSecondInput.toString());
-            }else{       // SE reads
-                args.add("-S"); // skips mate rescuing and pairing
-                args.add("-P");
-                args.add(pathToReference.toString());
-                args.add(pathToInput.toString());
-            }
+        }else if(null==secondInput) { // SE reads
+            args.add("-S"); // skips mate rescuing and pairing
+            args.add("-P");
         }
+        args.add(pathToReference.toString());
+        args.add(pathToInput.toString());
+
+        if(null!=secondInput){ // paired reads, separate files
+            final Path pathToSecondInput = Paths.get(secondInput);
+            args.add(pathToSecondInput.toString());
+        }
+
         return args;
     }
 }

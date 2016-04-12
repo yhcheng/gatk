@@ -33,10 +33,10 @@ public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
         final File samOutput = boilerPlate(args);
 
         // input arguments
-        final File input = new File(TEST_DATA_DIR, "intput_1.fastq");
+        final File input = new File(TEST_DATA_DIR, "input_1.fastq");
         args.add("-" + StandardArgumentDefinitions.INPUT_SHORT_NAME);
         args.add(input.getAbsolutePath());
-        final File secondInput = new File(TEST_DATA_DIR, "intput_2.fastq");
+        final File secondInput = new File(TEST_DATA_DIR, "input_2.fastq");
         args.add("-" + "I2");
         args.add(secondInput.getAbsolutePath());
 
@@ -72,8 +72,6 @@ public final class RunMinimalBWAMEMTest extends CommandLineProgramTest {
     }
 
     private static File boilerPlate(final ArgumentsBuilder args) throws IOException{
-
-
 
         final File wkDir = BaseTest.createTempDir("dummy");
         args.add("-" + "outDir");
