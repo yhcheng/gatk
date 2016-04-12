@@ -6,11 +6,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.lang.reflect.Array;
 import java.util.ArrayList;
-import java.util.List;
-
-// TODO: see if working environment needs to be set up
 
 /**
  * A class for experimenting with cmd line programs (such as bwa and sga) that's not part of GATK (or has Java bindings yet).
@@ -24,7 +20,7 @@ public abstract class CMDLineProgramModule {
      * @return a list of strings having the names of requested tools.
      * @throws IOException
      */
-    abstract List<String> initializeCommands() throws IOException;
+    abstract ArrayList<String> initializeCommands() throws IOException;
 
     /**
      * Worker function to call the cmd line program.
@@ -41,7 +37,7 @@ public abstract class CMDLineProgramModule {
                     final File stdoutDestination,
                     String stderrMessageDestination) throws IOException, InterruptedException, RuntimeException{
 
-        final List<String> commands = initializeCommands();
+        final ArrayList<String> commands = initializeCommands();
         for(final String arg : runtimeArguments){ commands.add(arg); }
 
         final ProcessBuilder builder = new ProcessBuilder(commands);
@@ -50,19 +46,16 @@ public abstract class CMDLineProgramModule {
 
         Process runProcess = builder.start();
         int exitStatus = runProcess.waitFor();
-
-        if(0!=exitStatus){ onError(commands, redirectSTDERR(runProcess), exitStatus); }
-
         stderrMessageDestination = redirectSTDERR(runProcess);
+
+        if(0!=exitStatus){ onError(commands, stderrMessageDestination, exitStatus); }
     }
 
     protected void setupWorkingDir(final ProcessBuilder builder,
                                    final File directoryToWorkIn,
                                    final File stdoutDestination){
         builder.directory(directoryToWorkIn);
-        if(null!=stdoutDestination) {
-            builder.redirectOutput(stdoutDestination);
-        }
+        if(null!=stdoutDestination) { builder.redirectOutput(stdoutDestination); }
     }
 
     /**
@@ -72,6 +65,12 @@ public abstract class CMDLineProgramModule {
      */
     abstract void setupWorkingEnvironment(final ProcessBuilder builder, final String... args);
 
+    /**
+     * Redirects the stderr message from the represented program to a string.
+     * @param process       the program's process
+     * @return              String converted from the stderr message of the program
+     * @throws IOException
+     */
     protected static String redirectSTDERR(final Process process) throws IOException{
         final BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
         StringBuilder out = new StringBuilder();
@@ -86,18 +85,30 @@ public abstract class CMDLineProgramModule {
         return out.toString();
     }
 
-    private static void onError(final List<String> commands, final String commandMessage, final int commandExitStatus) throws RuntimeException{
+    /**
+     * Strategy for error handling when program returns non-zero exit status.
+     * @param commands           the list of commands, arguments, flags used in running the process
+     * @param stderrMessage      the stderr message form the process
+     * @param commandExitStatus  exit status of the process
+     * @throws RuntimeException
+     */
+    private static void onError(final ArrayList<String> commands, final String stderrMessage, final int commandExitStatus) throws RuntimeException{
         String errorMessage = "";
         for(final String mess : commands){ errorMessage += " " + mess; }
-        errorMessage += "\n" + commandMessage;
+        errorMessage += "\n" + stderrMessage;
         throw new RuntimeException("Errors occurred while running: " + errorMessage +
                                     "\nWith exit status: " + commandExitStatus);
     }
 
+    /**
+     * Checks if the program to be represented is available.
+     * @param programName   the name of the program (case-sensitive) to be tested and run subsequently if available
+     * @throws IOException  throws IOException if the program is not available.
+     */
     @VisibleForTesting
     static void checkIfProgramIsAvailableOnHost(final String programName) throws IOException{
         try{
-            final List<String> commands = new ArrayList<>();
+            final ArrayList<String> commands = new ArrayList<>();
             commands.add("which");
             commands.add(programName);
             final ProcessBuilder testIfProgramIsAvailableOnHost = new ProcessBuilder(commands);

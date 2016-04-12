@@ -40,6 +40,12 @@ public final class RunMinimalBWAMEM extends CommandLineProgram {
               optional  = true)
     public boolean interLeaved = false;
 
+    @Argument(doc       = "If set to true, assumes input are single ended data.",
+            shortName = "se",
+            fullName  = "singleEnd",
+            optional  = true)
+    public boolean SEInput = false;
+
     @Argument(doc       = "Absolute path to reference of the target organism, if alignment of assembled contigs to reference is desired.",
               shortName = StandardArgumentDefinitions.REFERENCE_SHORT_NAME,
               fullName  = StandardArgumentDefinitions.REFERENCE_LONG_NAME,
@@ -73,9 +79,9 @@ public final class RunMinimalBWAMEM extends CommandLineProgram {
     @Override
     public String doWork() throws RuntimeException{
 
-        if(!interLeaved && secondInput==null){
-            throw new RuntimeException("Missing cmd line argument options: \n" +
-                                       "Option \"-p\" not set but only one FASTQ/A given.");
+        final boolean validOptions = (null==secondInput) ? !(interLeaved && SEInput) : (!interLeaved || SEInput);
+        if(!validOptions){
+            throw new RuntimeException("CMD line argument options on input (paired, interleaved, or SE) don't make sense. Please check.");
         }
 
         String stderrMessage = new String( LogManager.getLogger(this.getClass()).toString() );

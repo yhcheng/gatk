@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.spark.sv;
 
 
 import java.util.ArrayList;
-import java.util.List;
 import java.io.IOException;
 
 /**
@@ -11,9 +10,9 @@ import java.io.IOException;
 public final class BWAMEMModule extends CMDLineProgramModule{
 
     @Override
-    public List<String> initializeCommands() throws IOException{
+    public ArrayList<String> initializeCommands() throws IOException{
         checkIfProgramIsAvailableOnHost("bwa");
-        final List<String> res = new ArrayList<>();
+        final ArrayList<String> res = new ArrayList<>();
         res.add("bwa");
         res.add("mem");
         return res;
