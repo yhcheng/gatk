@@ -279,7 +279,6 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
     private static int PGAvailabilityCheck(){
 
         try{
-            CMDLineProgramModule.checkIfProgramIsAvailableOnHost("bwa");
             CMDLineProgramModule.checkIfProgramIsAvailableOnHost("sga");
         }catch(final IOException e){
             System.err.println("Can't find SGA or BWA on host machine, so can't perform task. Quit.");

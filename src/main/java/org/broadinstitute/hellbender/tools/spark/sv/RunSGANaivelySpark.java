@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+// TODO: log stderr messages from sga
 // TODO: choose which parameters allowed to be tunable
 // TODO: not all steps in SGA are currently covered
 // TODO: if throws, would temp files be cleaned up automatically?
@@ -54,12 +55,6 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
               optional  = true)
     public boolean runCorrectionSteps = false;
 
-    @Argument(doc       = "Absolute path to reference of the target organism, if alignment of assembled contigs to reference is desired.",
-              shortName = StandardArgumentDefinitions.REFERENCE_SHORT_NAME,
-              fullName  = StandardArgumentDefinitions.REFERENCE_LONG_NAME,
-              optional  = true)
-    public String reference = null;
-
     @Override
     public boolean requiresReads(){
         return true;
@@ -78,14 +73,8 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
         final JavaPairRDD<Long, File> assembledContigs = readsAroundBreakpoints.mapToPair(RunSGANaivelySpark::convertReadsToFASTQ)
                                                                                .mapToPair(entry -> RunSGANaivelySpark.performAssembly(entry, threads, runCorrectionSteps));
 
-        if(null!=reference){
-            final Path pathToReference = Paths.get(reference);
-            assembledContigs.mapToPair(entry -> RunSGANaivelySpark.alignToRef(entry, pathToReference))
-                            .saveAsObjectFile(outputDir);
-        }else{
-            assembledContigs.mapToPair(entry -> new Tuple2<>(entry._1(), new ContigsCollection(entry._2())))
-                            .saveAsObjectFile(outputDir);
-        }
+        assembledContigs.mapToPair(entry -> new Tuple2<>(entry._1(), new ContigsCollection(entry._2())))
+                        .saveAsObjectFile(outputDir);
     }
 
     /**
@@ -148,13 +137,15 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
 
         final File rawFASTQ = fastqFilesForEachBreakPoint._2();
 
-        final File assembledContigsFile = SGASerialRunner(rawFASTQ, threads, runCorrections);
+        String stderrMessages = ""; //TODO: better way to log
+
+        final File assembledContigsFile = SGASerialRunner(rawFASTQ, threads, runCorrections, stderrMessages);
 
         return new Tuple2<>(fastqFilesForEachBreakPoint._1(), assembledContigsFile);
     }
 
     @VisibleForTesting
-    static File SGASerialRunner(final File rawFASTQ, final int threads, final boolean runCorrections) throws IOException, InterruptedException, RuntimeException{
+    static File SGASerialRunner(final File rawFASTQ, final int threads, final boolean runCorrections, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         int threadsToUse = threads;
         if( System.getProperty("os.name").toLowerCase().contains("mac") && threads>1){ // TODO: is this the right way to check OS?
@@ -167,137 +158,132 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
 
         final SGAModule indexer = new SGAModule("index");
 
-        String preppedFileName = SGAPreprocess(rawFASTQ, workingDir, indexer, threadsToUse);
+        String preppedFileName = SGAPreprocess(rawFASTQ, workingDir, indexer, threadsToUse, stderrMessages);
 
         final File preprocessedFile = new File(workingDir, preppedFileName);
 
         if(runCorrections){
-            preppedFileName = SGACorrect(preprocessedFile, workingDir, indexer, threadsToUse);
+            preppedFileName = SGACorrect(preprocessedFile, workingDir, indexer, threadsToUse, stderrMessages);
             final File correctedFile = new File(workingDir, preppedFileName);
-            preppedFileName = SGAFilter(correctedFile, workingDir, indexer, threadsToUse);
+            preppedFileName = SGAFilter(correctedFile, workingDir, indexer, threadsToUse, stderrMessages);
             final File filterPassingFile = new File(workingDir, preppedFileName);
-            preppedFileName = SGArmDuplicate(filterPassingFile, workingDir, indexer, threadsToUse);
+            preppedFileName = SGArmDuplicate(filterPassingFile, workingDir, indexer, threadsToUse, stderrMessages);
         }
 
         final File fileToMerge = new File(workingDir, preppedFileName);
-        final File fileToAssemble = new File (workingDir, SGAFMMerge(fileToMerge, workingDir, indexer, threadsToUse) );
-        final File assembledContigs = new File(workingDir, SGAAssemble(fileToAssemble, workingDir, threadsToUse) );
+        final File fileToAssemble = new File (workingDir, SGAFMMerge(fileToMerge, workingDir, indexer, threadsToUse, stderrMessages) );
+        final File assembledContigs = new File(workingDir, SGAAssemble(fileToAssemble, workingDir, threadsToUse, stderrMessages) );
         return assembledContigs;
     }
 
     // returns file name of the preprocessed FASTA file
     @VisibleForTesting
-    static String SGAPreprocess(final File inputFASTQFile, final File outputDirectory, final SGAModule indexer, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGAPreprocess(final File inputFASTQFile, final File outputDirectory, final SGAModule indexer, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         final String prefix = extractBaseNameWithoutExtension(inputFASTQFile);
-        final String preprocessedFASTAFILE = prefix+".pp.fa";
+        final String preprocessedFASTAFileName = prefix+".pp.fa";
 
         final SGAModule preprocess = new SGAModule("preprocess");
-        final String args[] = {"--pe-mode", "2",
-                                "--pe-orphans", prefix+".pp.orphan.fa",
-                                "--out", preprocessedFASTAFILE,
-                                inputFASTQFile.getName()};
-        preprocess.run(args, outputDirectory, null);
+        final ArrayList<String> ppArgs = new ArrayList<>();
+        ppArgs.add("--pe-mode");    ppArgs.add("2");
+        ppArgs.add("--pe-orphans"); ppArgs.add(prefix+".pp.orphan.fa");
+        ppArgs.add("--out");        ppArgs.add(preprocessedFASTAFileName);
+        ppArgs.add(inputFASTQFile.getName());
 
-        final String indexArgs[] = {"--algorithm", "ropebwt",
-                                    "--check",
-                                    "--threads", Integer.toString(threads),
-                                    preprocessedFASTAFILE};
-        indexer.run(indexArgs, outputDirectory, null);
+        preprocess.run(ppArgs, outputDirectory, null, stderrMessages);
 
-        return preprocessedFASTAFILE;
+        final ArrayList<String> indexArgs = makeStandardIndexerArgs(threads);
+        indexArgs.add(preprocessedFASTAFileName);
+        indexer.run(indexArgs, outputDirectory, null, stderrMessages);
+
+        return preprocessedFASTAFileName;
     }
 
     // correction, filter, and remove duplicates stringed together
     // returns the file name of the cleaned up FASTA file
     @VisibleForTesting
-    static String SGACorrect(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGACorrect(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         final SGAModule correction = new SGAModule("correct");
-        final String correctionArgs[] = {"--threads", Integer.toString(threads),
-                                         inputFASTAFile.getName()};
-        correction.run(correctionArgs, outputDirectory, null);
+        final ArrayList<String> correctionArgs = new ArrayList<>();
+        correctionArgs.add("--threads"); correctionArgs.add(Integer.toString(threads));
+        correctionArgs.add(inputFASTAFile.getName());
+        correction.run(correctionArgs, outputDirectory, null, stderrMessages);
 
         final String correctedFileName = extractBaseNameWithoutExtension(inputFASTAFile) +".ec.fa";
-        final String indexArgs[] = {"--algorithm", "ropebwt",
-                                    "--check",
-                                    "--threads", Integer.toString(threads),
-                                    correctedFileName};
-        indexer.run(indexArgs, outputDirectory, null);
+        final ArrayList<String> indexArgs = makeStandardIndexerArgs(threads);
+        indexArgs.add(correctedFileName);
+        indexer.run(indexArgs, outputDirectory, null, stderrMessages);
 
         return correctedFileName;
     }
 
     @VisibleForTesting
-    static String SGAFilter(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGAFilter(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
         final String prefix = extractBaseNameWithoutExtension(inputFASTAFile);
         final SGAModule filter = new SGAModule("filter");
-        final String filterArgs[] = {"--threads", Integer.toString(threads), prefix+".fa"};
-        filter.run(filterArgs, outputDirectory, null);
+        final ArrayList<String> filterArgs = new ArrayList<>();
+        filterArgs.add("--threads"); filterArgs.add(Integer.toString(threads));
+        filterArgs.add(prefix+".fa");
+        filter.run(filterArgs, outputDirectory, null, stderrMessages);
         return prefix+".filter.pass.fa";
     }
 
     @VisibleForTesting
-    static String SGArmDuplicate(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGArmDuplicate(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         final SGAModule rmdup = new SGAModule("rmdup");
-        final String rmdupArgs[] = {"--threads", Integer.toString(threads), inputFASTAFile.getName()};
-        rmdup.run(rmdupArgs, outputDirectory, null);
+        final ArrayList<String> rmdupArgs = new ArrayList<>();
+        rmdupArgs.add("--threads"); rmdupArgs.add(Integer.toString(threads));
+        rmdupArgs.add(inputFASTAFile.getName());
+        rmdup.run(rmdupArgs, outputDirectory, null, stderrMessages);
 
         final String duplicateRemovedFileName = extractBaseNameWithoutExtension(inputFASTAFile) + ".rmdup.fa";
-        final String indexArgs[] = {"--algorithm", "ropebwt",
-                                    "--check",
-                                    "--threads", Integer.toString(threads),
-                duplicateRemovedFileName};
-        indexer.run(indexArgs, outputDirectory, null);
+
+        final ArrayList<String> indexArgs = makeStandardIndexerArgs(threads);
+        indexArgs.add(duplicateRemovedFileName);
+        indexer.run(indexArgs, outputDirectory, null, stderrMessages);
 
         return duplicateRemovedFileName;
     }
+
     @VisibleForTesting
-    static String SGAFMMerge(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGAFMMerge(final File inputFASTAFile, final File outputDirectory, final SGAModule indexer, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         final SGAModule merge = new SGAModule("fm-merge");
-        final String mergeArgs[] = {"--threads", Integer.toString(threads), inputFASTAFile.getName()};
-        merge.run(mergeArgs, outputDirectory, null);
+        final ArrayList<String> mergeArgs = new ArrayList<>();
+        mergeArgs.add("--threads"); mergeArgs.add(Integer.toString(threads));
+        mergeArgs.add(inputFASTAFile.getName());
+        merge.run(mergeArgs, outputDirectory, null, stderrMessages);
 
         final String mergedFileName = extractBaseNameWithoutExtension(inputFASTAFile) + ".merged.fa";
-        final String indexArgs[] = {"--algorithm", "ropebwt",
-                                    "--check",
-                                    "--threads", Integer.toString(threads),
-                                    mergedFileName};
-        indexer.run(indexArgs, outputDirectory, null);
+
+        final ArrayList<String> indexArgs = makeStandardIndexerArgs(threads);
+        indexArgs.add(mergedFileName);
+        indexer.run(indexArgs, outputDirectory, null, stderrMessages);
+
         return mergedFileName;
     }
 
     // construct overlap graph and performs assemble
     // returns the FASTA file name of the assembled contigs
     @VisibleForTesting
-    static String SGAAssemble(final File inputFASTAFile, final File outputDirectory, int threads) throws IOException, InterruptedException, RuntimeException{
+    static String SGAAssemble(final File inputFASTAFile, final File outputDirectory, int threads, String stderrMessages) throws IOException, InterruptedException, RuntimeException{
 
         final SGAModule overlap = new SGAModule("overlap");
-        final String[] overlapArgs = {"--threads", Integer.toString(threads), inputFASTAFile.getName()};
-        overlap.run(overlapArgs, outputDirectory, null);
+        final ArrayList<String> overlapArgs = new ArrayList<>();
+        overlapArgs.add("--threads"); overlapArgs.add(Integer.toString(threads));
+        overlapArgs.add(inputFASTAFile.getName());
+        overlap.run(overlapArgs, outputDirectory, null, stderrMessages);
 
         final String prefix = extractBaseNameWithoutExtension(inputFASTAFile);
 
         final SGAModule assemble = new SGAModule("assemble");
-        final String[] assembleArgs = {"--out-prefix", prefix, prefix+".asqg.gz"};
-        assemble.run(assembleArgs, outputDirectory, null);
+        final ArrayList<String> assembleArgs = new ArrayList<>();
+        assembleArgs.add("--out-prefix"); assembleArgs.add(prefix);
+        assembleArgs.add(prefix+".asqg.gz");
+        assemble.run(assembleArgs, outputDirectory, null, stderrMessages);
         return prefix+"-contigs.fa";
-    }
-
-    @VisibleForTesting
-    static Tuple2<Long, File> alignToRef(final Tuple2<Long, File> contigsFiles, final Path pathToReference) throws IOException, InterruptedException, RuntimeException{
-
-        final BWAMEMModule bwamem = new BWAMEMModule();
-        final String[] bwaArgs = {"-M", "-S", "-P",
-                                  pathToReference.toString(),
-                                  contigsFiles._2().getName()};
-
-        final File bamFile = new File(contigsFiles._2().getParentFile(), extractBaseNameWithoutExtension(contigsFiles._2()) + ".bam");
-
-        bwamem.run(bwaArgs, contigsFiles._2().getParentFile(), bamFile);
-        return new Tuple2<>(contigsFiles._1(), bamFile);
     }
 
     // From https://www.stackoverflow.com/questions/4545937
@@ -307,6 +293,13 @@ public final class RunSGANaivelySpark extends GATKSparkTool {
         return tokens[0];
     }
 
+    private static ArrayList<String> makeStandardIndexerArgs(int threads){
+        final ArrayList<String> indexerArgs = new ArrayList<>();
+        indexerArgs.add("--algorithm"); indexerArgs.add("ropebwt");
+        indexerArgs.add("--threads");   indexerArgs.add(Integer.toString(threads));
+        indexerArgs.add("--check");
+        return indexerArgs;
+    }
     /**
      * Represents a collection of assembled contigs in the final output of "sga assemble".
      */
