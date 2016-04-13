@@ -111,6 +111,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
         Assert.assertTrue( compareContigs(assembledContigsFile) );
         System.err.println(stderrMessage);
     }
+
     // test intermediate reads (see if correction steps are run correctly) and assembled result
     @Test(groups = "sv")
     public void assemblyStepByStepTest() throws IOException, InterruptedException, RuntimeException{
@@ -121,7 +122,13 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
         final Integer zero = 0;
         String stderrMessage = "";
 
-        final File actualPreppedFile = new File(workingDir, RunSGANaivelySpark.SGAPreprocess(tempFASTQFile._2(), workingDir, indexer, threads, stderrMessage));
+        final ArrayList<String> indexerArgs = new ArrayList<>();
+        indexerArgs.add("--algorithm"); indexerArgs.add("ropebwt");
+        indexerArgs.add("--threads");   indexerArgs.add(Integer.toString(threads));
+        indexerArgs.add("--check");
+        indexerArgs.add("");
+
+        final File actualPreppedFile = new File(workingDir, RunSGANaivelySpark.SGAPreprocess(tempFASTQFile._2(), workingDir, indexer, indexerArgs, stderrMessage));
         final File expectedPreppedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.fa");
         final String preppedFileName = compareNamesAndComputeSeqEditDist(actualPreppedFile, expectedPreppedFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
@@ -130,7 +137,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
         editDistancesBetweenSeq = new ArrayList<>();
         stderrMessage = "";
         final File preppedFile = new File(workingDir, preppedFileName);
-        final File actualCorrectedFile = new File(workingDir, RunSGANaivelySpark.SGACorrect(preppedFile, workingDir, indexer, threads, stderrMessage));
+        final File actualCorrectedFile = new File(workingDir, RunSGANaivelySpark.SGACorrect(preppedFile, workingDir, indexer, indexerArgs, threads, stderrMessage));
         final File expectedCorrectedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.fa");
         final String correctedFileName = compareNamesAndComputeSeqEditDist(actualCorrectedFile, expectedCorrectedFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
@@ -138,7 +145,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File correctedFile = new File(workingDir, correctedFileName);
-        final File actualFilterPassingFile = new File(workingDir, RunSGANaivelySpark.SGAFilter(correctedFile, workingDir, indexer, threads, stderrMessage));
+        final File actualFilterPassingFile = new File(workingDir, RunSGANaivelySpark.SGAFilter(correctedFile, workingDir, threads, stderrMessage));
         final File expectedFilterPassingFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.fa");
         final String filterPassingFileName = compareNamesAndComputeSeqEditDist(actualFilterPassingFile, expectedFilterPassingFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
@@ -146,7 +153,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File filterPassingFile = new File(workingDir, filterPassingFileName);
-        final File actualRmdupFile = new File(workingDir, RunSGANaivelySpark.SGArmDuplicate(filterPassingFile, workingDir, indexer, threads, stderrMessage));
+        final File actualRmdupFile = new File(workingDir, RunSGANaivelySpark.SGArmDuplicate(filterPassingFile, workingDir, indexer, indexerArgs, threads, stderrMessage));
         final File expectedRmdupFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.rmdup.fa");
         final String duplicateRemovedFileName = compareNamesAndComputeSeqEditDist(actualRmdupFile, expectedRmdupFile, false, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
@@ -154,7 +161,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File duplicateRemovedFile = new File(workingDir, duplicateRemovedFileName);
-        final File actualMergedFile = new File(workingDir, RunSGANaivelySpark.SGAFMMerge(duplicateRemovedFile, workingDir, indexer, threads, stderrMessage));
+        final File actualMergedFile = new File(workingDir, RunSGANaivelySpark.SGAFMMerge(duplicateRemovedFile, workingDir, indexer, indexerArgs, threads, stderrMessage));
         final File expectedMergedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.rmdup.merged.fa");
         final String mergedFileName = compareNamesAndComputeSeqEditDist(actualMergedFile, expectedMergedFile, false, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
@@ -235,7 +242,7 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
         return RunSGANaivelySpark.extractBaseNameWithoutExtension(actualFile) + ".fa";
     }
 
-    // utility function: for extracting read names from a fastq file
+    // utility function: for extracting read names and sequences from a fastq file
     private static void extractNamesAndSeqFromFASTQ(final File FASTAfile, final boolean fastqFilesWellFormed, List<String> readNames, List<String> sequences) throws IOException{
 
         if(fastqFilesWellFormed){
