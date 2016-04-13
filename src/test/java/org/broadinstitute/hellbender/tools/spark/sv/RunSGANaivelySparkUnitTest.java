@@ -105,9 +105,11 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
 
         if( 0!= PGAvailabilityCheck() ) { return; }
 
-        final File assembledContigsFile = RunSGANaivelySpark.SGASerialRunner(tempFASTQFile._2(), 1, true);
+        String stderrMessage = "";
+        final File assembledContigsFile = RunSGANaivelySpark.SGASerialRunner(tempFASTQFile._2(), 1, true, stderrMessage);
 
         Assert.assertTrue( compareContigs(assembledContigsFile) );
+        System.err.println(stderrMessage);
     }
     // test intermediate reads (see if correction steps are run correctly) and assembled result
     @Test(groups = "sv")
@@ -117,43 +119,52 @@ public class RunSGANaivelySparkUnitTest extends CommandLineProgramTest {
 
         ArrayList<Integer> editDistancesBetweenSeq = new ArrayList<>();
         final Integer zero = 0;
-        final File actualPreppedFile = new File(workingDir, RunSGANaivelySpark.SGAPreprocess(tempFASTQFile._2(), workingDir, indexer, threads));
+        String stderrMessage = "";
+
+        final File actualPreppedFile = new File(workingDir, RunSGANaivelySpark.SGAPreprocess(tempFASTQFile._2(), workingDir, indexer, threads, stderrMessage));
         final File expectedPreppedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.fa");
         final String preppedFileName = compareNamesAndComputeSeqEditDist(actualPreppedFile, expectedPreppedFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
+        System.err.println(stderrMessage);
 
         editDistancesBetweenSeq = new ArrayList<>();
+        stderrMessage = "";
         final File preppedFile = new File(workingDir, preppedFileName);
-        final File actualCorrectedFile = new File(workingDir, RunSGANaivelySpark.SGACorrect(preppedFile, workingDir, indexer, threads));
+        final File actualCorrectedFile = new File(workingDir, RunSGANaivelySpark.SGACorrect(preppedFile, workingDir, indexer, threads, stderrMessage));
         final File expectedCorrectedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.fa");
         final String correctedFileName = compareNamesAndComputeSeqEditDist(actualCorrectedFile, expectedCorrectedFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
+        System.err.println(stderrMessage);
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File correctedFile = new File(workingDir, correctedFileName);
-        final File actualFilterPassingFile = new File(workingDir, RunSGANaivelySpark.SGAFilter(correctedFile, workingDir, indexer, threads));
+        final File actualFilterPassingFile = new File(workingDir, RunSGANaivelySpark.SGAFilter(correctedFile, workingDir, indexer, threads, stderrMessage));
         final File expectedFilterPassingFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.fa");
         final String filterPassingFileName = compareNamesAndComputeSeqEditDist(actualFilterPassingFile, expectedFilterPassingFile, true, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
+        System.err.println(stderrMessage);
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File filterPassingFile = new File(workingDir, filterPassingFileName);
-        final File actualRmdupFile = new File(workingDir, RunSGANaivelySpark.SGArmDuplicate(filterPassingFile, workingDir, indexer, threads));
+        final File actualRmdupFile = new File(workingDir, RunSGANaivelySpark.SGArmDuplicate(filterPassingFile, workingDir, indexer, threads, stderrMessage));
         final File expectedRmdupFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.rmdup.fa");
         final String duplicateRemovedFileName = compareNamesAndComputeSeqEditDist(actualRmdupFile, expectedRmdupFile, false, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
+        System.err.println(stderrMessage);
 
         editDistancesBetweenSeq = new ArrayList<>();
         final File duplicateRemovedFile = new File(workingDir, duplicateRemovedFileName);
-        final File actualMergedFile = new File(workingDir, RunSGANaivelySpark.SGAFMMerge(duplicateRemovedFile, workingDir, indexer, threads));
+        final File actualMergedFile = new File(workingDir, RunSGANaivelySpark.SGAFMMerge(duplicateRemovedFile, workingDir, indexer, threads, stderrMessage));
         final File expectedMergedFile = new File(TEST_DATA_DIR, "RunSGANaivelySparkUnitTest.pp.ec.filter.pass.rmdup.merged.fa");
         final String mergedFileName = compareNamesAndComputeSeqEditDist(actualMergedFile, expectedMergedFile, false, editDistancesBetweenSeq);
         for(final Integer d : editDistancesBetweenSeq){ Assert.assertEquals(d, zero); }
+        System.err.println(stderrMessage);
 
         // final assembled contig test
         final File mergedFile = new File(workingDir, mergedFileName);
-        final File actualAssembledContigsFile = new File(workingDir, RunSGANaivelySpark.SGAAssemble(mergedFile, workingDir, threads));
+        final File actualAssembledContigsFile = new File(workingDir, RunSGANaivelySpark.SGAAssemble(mergedFile, workingDir, threads, stderrMessage));
         Assert.assertTrue( compareContigs(actualAssembledContigsFile) );
+        System.err.println(stderrMessage);
     }
 
     private static boolean compareContigs(final File actualAssembledContigsFile) throws IOException, InterruptedException{
