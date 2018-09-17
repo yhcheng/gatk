@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.utils.read.mergealignment;
 import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SAMTag;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -138,10 +139,10 @@ public final class HitsForInsert {
         for (int i = 0; i < this.numHits(); ++i) {
             final boolean notPrimary = (i != primaryAlignmentIndex);
             if (this.getFirstOfPair(i) != null) {
-                this.getFirstOfPair(i).setNotPrimaryAlignmentFlag(notPrimary);
+                this.getFirstOfPair(i).setSecondaryAlignment(notPrimary);
             }
             if (this.getSecondOfPair(i) != null) {
-                this.getSecondOfPair(i).setNotPrimaryAlignmentFlag(notPrimary);
+                this.getSecondOfPair(i).setSecondaryAlignment(notPrimary);
             }
         }
 
@@ -222,7 +223,10 @@ public final class HitsForInsert {
     }
 
     // null HI tag sorts after any non-null.
-    private static class HitIndexComparator implements Comparator<SAMRecord> {
+    private static class HitIndexComparator implements Comparator<SAMRecord>, Serializable {
+        private static final long serialVersionUID = 6543097107370587679L;
+
+        @Override
         public int compare(final SAMRecord rec1, final SAMRecord rec2) {
             final Integer hi1 = rec1.getIntegerAttribute(SAMTag.HI.name());
             final Integer hi2 = rec2.getIntegerAttribute(SAMTag.HI.name());

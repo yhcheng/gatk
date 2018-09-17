@@ -1,13 +1,17 @@
 
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
-import htsjdk.samtools.util.Locatable;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.engine.AssemblyRegion;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreading.ReadThreadingGraph;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.collections.CountSet;
+import org.broadinstitute.hellbender.utils.haplotype.EventMap;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
+import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -34,11 +38,12 @@ public final class AssemblyResultSet {
     private final Map<Haplotype,AssemblyResult> assemblyResultByHaplotype;
     private AssemblyRegion regionForGenotyping;
     private byte[] fullReferenceWithPadding;
-    private Locatable paddedReferenceLoc;
+    private SimpleInterval paddedReferenceLoc;
     private boolean variationPresent;
     private Haplotype refHaplotype;
     private boolean wasTrimmed = false;
     private final CountSet kmerSizes;
+    private SortedSet<VariantContext> variationEvents;
     private boolean debug;
     private static final Logger logger = LogManager.getLogger(AssemblyResultSet.class);
 
@@ -86,8 +91,8 @@ public final class AssemblyResultSet {
         }
 
         result.setRegionForGenotyping(trimmedAssemblyRegion);
-        result.setFullReferenceWithPadding(this.fullReferenceWithPadding);
-        result.setPaddedReferenceLoc(this.paddedReferenceLoc);
+        result.setFullReferenceWithPadding(fullReferenceWithPadding);
+        result.setPaddedReferenceLoc(paddedReferenceLoc);
         if (result.refHaplotype == null) {
             throw new IllegalStateException("missing reference haplotype in the trimmed set");
         }
@@ -190,8 +195,8 @@ public final class AssemblyResultSet {
         if (getHaplotypeList().isEmpty()) {
             return;
         }
-        pw.println("Active Region " + this.regionForGenotyping.getSpan());
-        pw.println("Extended Act Region " + this.getRegionForGenotyping().getExtendedSpan());
+        pw.println("Active Region " + regionForGenotyping.getSpan());
+        pw.println("Extended Act Region " + getRegionForGenotyping().getExtendedSpan());
         pw.println("Ref haplotype coords " + getHaplotypeList().get(0).getGenomeLocation());
         pw.println("Haplotype count " + haplotypes.size());
         final Map<Integer,Integer> kmerSizeToCount = new HashMap<>();
@@ -350,7 +355,7 @@ public final class AssemblyResultSet {
      *
      * @return might be {@code null}
      */
-    public Locatable getPaddedReferenceLoc() {
+    public SimpleInterval getPaddedReferenceLoc() {
         return paddedReferenceLoc;
     }
 
@@ -358,7 +363,7 @@ public final class AssemblyResultSet {
      * Changes the padded reference location.
      * @param paddedReferenceLoc the new value.
      */
-    public void setPaddedReferenceLoc(final Locatable paddedReferenceLoc) {
+    public void setPaddedReferenceLoc(final SimpleInterval paddedReferenceLoc) {
         this.paddedReferenceLoc = paddedReferenceLoc;
     }
 
@@ -489,5 +494,28 @@ public final class AssemblyResultSet {
         } else {// assumes that we have checked wether the haplotype is already in the collection and so is no need to check equality.
             throw new IllegalStateException("the assembly-result-set already have a reference haplotype that is different");
         }
+    }
+
+    /**
+     * Returns a sorted set of variant events that best explain the haplotypes found by the assembly
+     * across kmerSizes.
+     *
+     * <p/>
+     * The result is sorted incrementally by location.
+     * @param maxMnpDistance Phased substitutions separated by this distance or less are merged into MNPs.  More than
+     *                       two substitutions occuring in the same alignment block (ie the same M/X/EQ CIGAR element)
+     *                       are merged until a substitution is separated from the previous one by a greater distance.
+     *                       That is, if maxMnpDistance = 1, substitutions at 10,11,12,14,15,17 are partitioned into a MNP
+     *                       at 10-12, a MNP at 14-15, and a SNP at 17.  May not be negative.
+     * @return never {@code null}, but perhaps an empty collection.
+     */
+    public SortedSet<VariantContext> getVariationEvents(final int maxMnpDistance) {
+        ParamUtils.isPositiveOrZero(maxMnpDistance, "maxMnpDistance may not be negative.");
+        if (variationEvents == null) {
+            final List<Haplotype> haplotypeList = getHaplotypeList();
+            EventMap.buildEventMapsForHaplotypes(haplotypeList, fullReferenceWithPadding, paddedReferenceLoc, debug, maxMnpDistance);
+            variationEvents = EventMap.getAllVariantContexts(haplotypeList);
+        }
+        return variationEvents;
     }
 }

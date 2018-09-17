@@ -1,47 +1,52 @@
 package org.broadinstitute.hellbender.utils.pairhmm;
 
+import org.broadinstitute.gatk.nativebindings.pairhmm.PairHMMNativeArguments;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.genotyper.LikelihoodMatrix;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.text.parsers.BasicInputParser;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import picard.util.BasicInputParser;
 import org.testng.Assert;
 import org.testng.SkipException;
-import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.commons.lang3.tuple.ImmutablePair;
 
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.util.*;
 
-public final class VectorPairHMMUnitTest extends BaseTest {
-    private final static boolean DEBUG = false;
+public final class VectorPairHMMUnitTest extends GATKBaseTest {
 
-    private static final String publicTestDirRelative = "src/test/resources/";
-    public static final String publicTestDir = new File(gatkDirectory, publicTestDirRelative).getAbsolutePath() + "/";
-    public static final String pairHMMTestData = publicTestDir + "pairhmm-testdata.txt";
+    private static final String pairHMMTestData = publicTestDir + "pairhmm-testdata.txt";
 
-   @BeforeClass
-    public void initialize() {
-        if (!VectorLoglessPairHMM.isAVXSupported()) {
-          throw new SkipException("AVX is not supported on this system.");
-        } else {
+    // Return a list of supported VectorLoglessPairHMM implementations, skip the test if none are supported
+    private List<Pair<PairHMM, Boolean> > getHMMs() {
+        List<Pair<PairHMM, Boolean> > list = new ArrayList<>();
+        PairHMMNativeArguments args = new PairHMMNativeArguments();
+        args.useDoublePrecision = false;
+        args.maxNumberOfThreads = 1;
+
+        for (VectorLoglessPairHMM.Implementation imp : VectorLoglessPairHMM.Implementation.values()) {
+            boolean loaded = true;
+            PairHMM avxPairHMM = null;
             try {
-               new VectorLoglessPairHMM();
-            } catch (final Exception e){
-                throw new SkipException("AVX library not available");
+                avxPairHMM = new VectorLoglessPairHMM(imp, args);
+                //avxPairHMM.doNotUseTristateCorrection();
             }
-        }
-    }
+            catch (UserException.HardwareFeatureException e ) {
+                loaded = false;
+            }
 
-    private List<N2MemoryPairHMM> getHMMs() {
-        final N2MemoryPairHMM avxPairHMM = new VectorLoglessPairHMM();
-        avxPairHMM.doNotUseTristateCorrection();
-        return Collections.singletonList(avxPairHMM);
+            final Pair<PairHMM, Boolean> hmm_load = new ImmutablePair<PairHMM, Boolean>(avxPairHMM, new Boolean(loaded));
+            list.add(hmm_load);
+        }
+
+        return list;
     }
 
     // --------------------------------------------------------------------------------
@@ -54,15 +59,20 @@ public final class VectorPairHMMUnitTest extends BaseTest {
     public Object[][] makeJustHMMProvider() {
         List<Object[]> tests = new ArrayList<>();
 
-        for ( final PairHMM hmm : getHMMs() ) {
-            tests.add(new Object[]{hmm});
+        for ( final Pair<PairHMM, Boolean> hmm_load : getHMMs() ) {
+            tests.add(new Object[]{hmm_load.getLeft(), hmm_load.getRight()});
         }
 
         return tests.toArray(new Object[][]{});
     }
 
     @Test(dataProvider = "JustHMMProvider")
-    public void testLikelihoodsFromHaplotypes(final PairHMM hmm){
+    public void testLikelihoodsFromHaplotypes(final PairHMM hmm, Boolean loaded){
+
+        // skip if not loaded
+        if(!loaded.booleanValue()) {
+            throw new SkipException("AVX PairHMM is not supported on this system or the library is not available");
+        }
 
         BasicInputParser parser = null;
         try {
@@ -78,9 +88,9 @@ public final class VectorPairHMMUnitTest extends BaseTest {
 
             final byte[] bases = tokens[1].getBytes();
             final byte[] baseQuals = normalize(tokens[2].getBytes(), 6);
-            final byte[] insertionQuals = normalize(tokens[3].getBytes(), 0);
-            final byte[] deletionQuals = normalize(tokens[4].getBytes(), 0);
-            final byte[] gcp = normalize(tokens[5].getBytes(), 0);
+            final byte[] insertionQuals = normalize(tokens[3].getBytes());
+            final byte[] deletionQuals = normalize(tokens[4].getBytes());
+            final byte[] gcp = normalize(tokens[5].getBytes());
             final double expectedResult = Double.parseDouble(tokens[6]);
 
             final int readLength = bases.length;
@@ -88,7 +98,7 @@ public final class VectorPairHMMUnitTest extends BaseTest {
             ReadUtils.setInsertionBaseQualities(read, insertionQuals);
             ReadUtils.setDeletionBaseQualities(read, deletionQuals);
 
-            final Map<GATKRead,byte[]> gpcs = new HashMap<>(readLength);
+            final Map<GATKRead,byte[]> gpcs = new LinkedHashMap<>(readLength);
             gpcs.put(read, gcp);
 
             hmm.initialize(Arrays.asList(hap), null, 0, 0);
@@ -98,9 +108,15 @@ public final class VectorPairHMMUnitTest extends BaseTest {
 
             Assert.assertEquals(la[0], expectedResult, 1e-5, "Likelihood not in expected range.");
         }
+
+        hmm.close();
     }
 
-    static byte[] normalize(byte[] scores, int min) {
+    private static byte[] normalize(byte[] scores) {
+        return normalize(scores, 0);
+    }
+
+    private static byte[] normalize(byte[] scores, int min) {
         for (int i = 0; i < scores.length; i++) {
             scores[i] -= 33;
             scores[i] = scores[i] < min ? (byte)min : scores[i];

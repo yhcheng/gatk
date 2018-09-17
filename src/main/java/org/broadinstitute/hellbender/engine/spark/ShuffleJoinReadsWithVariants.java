@@ -9,8 +9,9 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 import scala.Tuple2;
 
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * PairReadsAndVariants takes two RDDs (GATKRead and Variant) and returns an RDD with a
@@ -69,13 +70,13 @@ public class ShuffleJoinReadsWithVariants {
 
         // we group together all variants for each unique GATKRead.  As we combine through the Variants, they are added
         // to a HashSet that get continually merged together
-        return allPairs.aggregateByKey(new HashSet<>(), (vs, v) -> {
+        return allPairs.aggregateByKey(new LinkedHashSet<>(), (vs, v) -> {
             if (v != null) { // pairReadsWithVariants can produce null variant
-                ((HashSet<GATKVariant>) vs).add(v);
+                ((Set<GATKVariant>) vs).add(v);
             }
             return vs;
         }, (vs1, vs2) -> {
-            ((HashSet<GATKVariant>) vs1).addAll((HashSet<GATKVariant>) vs2);
+            ((Set<GATKVariant>) vs1).addAll((Set<GATKVariant>) vs2);
             return vs1;
         });
     }
@@ -87,7 +88,7 @@ public class ShuffleJoinReadsWithVariants {
             for (VariantShard shard : shards) {
                 out.add(new Tuple2<>(shard, gatkRead));
             }
-            return out;
+            return out.iterator();
         });
     }
 
@@ -98,7 +99,7 @@ public class ShuffleJoinReadsWithVariants {
             for (VariantShard shard : shards) {
                 out.add(new Tuple2<>(shard, variant));
             }
-            return out;
+            return out.iterator();
         });
     }
     private static JavaPairRDD<GATKRead, GATKVariant> pairReadsWithVariants(final JavaPairRDD<VariantShard, GATKRead> readsWShards,
@@ -125,7 +126,7 @@ public class ShuffleJoinReadsWithVariants {
                     out.add(new Tuple2<>(r, null));
                 }
             }
-            return out;
+            return out.iterator();
         });
     }
 }

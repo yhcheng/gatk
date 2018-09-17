@@ -1,20 +1,17 @@
 package org.broadinstitute.hellbender.cmdline.programgroups;
 
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramGroup;
+import org.broadinstitute.barclay.argparser.CommandLineProgramGroup;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
 
 /**
- * Copy Number tool group.
+ * Tools that analyze read coverage to detect copy number variants
  *
  * @author Valentin Ruano-Rubio &lt;valentin@broadinstitute.org&gt;
  */
 public final class CopyNumberProgramGroup implements CommandLineProgramGroup {
     @Override
-    public String getName() {
-        return "Copy Number Analysis";
-    }
+    public String getName() { return HelpConstants.DOC_CAT_CNV; }
 
     @Override
-    public String getDescription() {
-        return "Tools to analyze copy number data.";
-    }
+    public String getDescription() { return HelpConstants.DOC_CAT_CNV_SUMMARY; }
 }

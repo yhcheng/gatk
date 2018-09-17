@@ -1,13 +1,13 @@
 package org.broadinstitute.hellbender.engine;
 
+import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
+import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
-import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
-import java.util.stream.StreamSupport;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * A ReadWalker is a tool that processes a single read at a time from one or multiple sources of reads, with
@@ -15,18 +15,24 @@ import java.util.stream.StreamSupport;
  *
  * If multiple sources of reads are specified, they are merged together into a single sorted stream of reads.
  *
+ * Reads will be:
+ * - Transformed with {@link #makePreReadFilterTransformer()} before filtering.
+ * - Filtered with {@link #makeReadFilter()} before post-transformers.
+ * - Transformed with {@link #makePostReadFilterTransformer()} before processing.
+ * - Passed to {@link #apply(GATKRead, ReferenceContext, FeatureContext)} for processing.
+ *
  * ReadWalker authors must implement the apply() method to process each read, and may optionally implement
  * onTraversalStart() and/or onTraversalSuccess(). See the PrintReadsWithReference walker for an example.
  */
 public abstract class ReadWalker extends GATKTool {
 
-    @Argument(fullName = "disable_all_read_filters", shortName = "f", doc = "Disable all read filters", common = false, optional = true)
-    public boolean disable_all_read_filters = false;
-
     @Override
     public boolean requiresReads() {
         return true;
     }
+
+    @Override
+    public String getProgressMeterRecordLabel() { return "reads"; }
 
     /**
      * This number controls the size of the cache for our FeatureInputs
@@ -43,7 +49,14 @@ public abstract class ReadWalker extends GATKTool {
     protected final void onStartup() {
         super.onStartup();
 
-        if ( hasIntervals() ) {
+        setReadTraversalBounds();
+    }
+
+    /**
+     * Initialize traversal bounds if intervals are specified
+     */
+    void setReadTraversalBounds() {
+        if ( hasUserSuppliedIntervals() ) {
             reads.setTraversalBounds(intervalArgumentCollection.getTraversalParameters(getHeaderForReads().getSequenceDictionary()));
         }
     }
@@ -51,7 +64,8 @@ public abstract class ReadWalker extends GATKTool {
     @Override
     void initializeFeatures() {
         //We override this method to change lookahead of the cache
-        features = new FeatureManager(this, FEATURE_CACHE_LOOKAHEAD);
+        features = new FeatureManager(this, FEATURE_CACHE_LOOKAHEAD, cloudPrefetchBuffer, cloudIndexPrefetchBuffer,
+                                      referenceArguments.getReferencePath());
         if ( features.isEmpty() ) {  // No available sources of Features discovered for this tool
             features = null;
         }
@@ -61,20 +75,17 @@ public abstract class ReadWalker extends GATKTool {
      * Implementation of read-based traversal.
      * Subclasses can override to provide own behavior but default implementation should be suitable for most uses.
      *
-     * The default implementation creates filters using {@link #makeReadFilter}
-     * and then iterates over all reads, applies the filter and hands the resulting reads to the {@link #apply}
+     * The default implementation creates filters using {@link #makeReadFilter} and transformers using
+     * {@link #makePreReadFilterTransformer()} {@link #makePostReadFilterTransformer()} and then iterates over all reads, applies
+     * the pre-filter transformer, the filter, then the post-filter transformer and hands the resulting reads to the {@link #apply}
      * function of the walker (along with additional contextual information, if present, such as reference bases).
      */
     @Override
     public void traverse() {
         // Process each read in the input stream.
         // Supply reference bases spanning each read, if a reference is available.
-        final CountingReadFilter countedFilter = disable_all_read_filters ?
-                                                    new CountingReadFilter("Allow all", ReadFilterLibrary.ALLOW_ALL_READS ) :
-                                                    makeReadFilter();
-
-        StreamSupport.stream(reads.spliterator(), false)
-                .filter(countedFilter)
+        final CountingReadFilter countedFilter = makeReadFilter();
+        getTransformedReadStream(countedFilter)
                 .forEach(read -> {
                     final SimpleInterval readInterval = getReadInterval(read);
                     apply(read,
@@ -92,21 +103,23 @@ public abstract class ReadWalker extends GATKTool {
      * Note: some walkers must be able to work on any read, including those whose coordinates do not form a valid SimpleInterval.
      * So here we check this condition and create null intervals for such reads.
      */
-    private SimpleInterval getReadInterval(final GATKRead read) {
+    SimpleInterval getReadInterval(final GATKRead read) {
         return !read.isUnmapped() && SimpleInterval.isValid(read.getContig(), read.getStart(), read.getEnd()) ? new SimpleInterval(read) : null;
     }
 
     /**
-     * Returns the read filter (simple or composite) that will be applied to the reads before calling {@link #apply}.
-     * The default implementation uses the {@link WellformedReadFilter} filter with all default options.
-     * Default implementation of {@link #traverse()} calls this method once before iterating
-     * over the reads and reuses the filter object to avoid object allocation. Nevertheless, keeping state in filter objects is strongly discouraged.
+     * Returns the default list of CommandLineReadFilters that are used for this tool. The filters returned
+     * by this method are subject to selective enabling/disabling by the user via the command line. The
+     * default implementation uses the {@link WellformedReadFilter} filter with all default options. Subclasses
+     * can override to provide alternative filters.
      *
-     * Subclasses can extend to provide own filters (ie override and call super).
-     * Multiple filters can be composed by using {@link org.broadinstitute.hellbender.engine.filters.ReadFilter} composition methods.
+     * Note: this method is called before command line parsing begins, and thus before a SAMFileHeader is
+     * available through {link #getHeaderForReads}.
+     *
+     * @return List of individual filters to be applied for this tool.
      */
-    public CountingReadFilter makeReadFilter(){
-          return new CountingReadFilter("Wellformed", new WellformedReadFilter(getHeaderForReads()));
+    public List<ReadFilter> getDefaultReadFilters() {
+        return Collections.singletonList(new WellformedReadFilter());
     }
 
     /**

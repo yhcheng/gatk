@@ -2,12 +2,13 @@ package org.broadinstitute.hellbender.tools.spark.pipelines;
 
 import org.apache.commons.io.FileUtils;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 
 public final class CountBasesSparkIntegrationTest extends CommandLineProgramTest {
 
@@ -26,7 +27,7 @@ public final class CountBasesSparkIntegrationTest extends CommandLineProgramTest
         };
     }
 
-    @Test(dataProvider = "countBases")
+    @Test(dataProvider = "countBases", groups = "spark")
     public void countBases(final String fileName, final String referenceFileName, final long expectedCount) throws Exception {
         final File unsortedBam = new File(getTestDataDir(), fileName);
         final File outputTxt = createTempFile("count_bases", ".txt");
@@ -39,11 +40,11 @@ public final class CountBasesSparkIntegrationTest extends CommandLineProgramTest
         }
         this.runCommandLine(args.getArgsArray());
 
-        final String readIn = FileUtils.readFileToString(outputTxt.getAbsoluteFile());
+        final String readIn = FileUtils.readFileToString(outputTxt.getAbsoluteFile(), StandardCharsets.UTF_8);
         Assert.assertEquals((int) Integer.valueOf(readIn), expectedCount);
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testNoNPRWhenOutputIsUnspecified(){
         ArgumentsBuilder args = new ArgumentsBuilder();
         args.addInput(new File(getTestDataDir(), "count_bases.bam"));

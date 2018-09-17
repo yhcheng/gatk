@@ -1,13 +1,13 @@
 package org.broadinstitute.hellbender.utils.recalibration;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
-public final class EventTypeUnitTest extends BaseTest {
+public final class EventTypeUnitTest extends GATKBaseTest {
     @Test
     public void testEventTypes() {
         for ( final EventType et : EventType.values() ) {
@@ -22,7 +22,7 @@ public final class EventTypeUnitTest extends BaseTest {
 
     @Test
     public void testEventTypesEnumItself() {
-        final Set<String> shortReps = new HashSet<>();
+        final Set<String> shortReps = new LinkedHashSet<>();
         for ( final EventType et : EventType.values() ) {
             Assert.assertFalse(shortReps.contains(et.toString()), "Short representative for EventType has duplicates for " + et);
             shortReps.add(et.toString());

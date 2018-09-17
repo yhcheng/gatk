@@ -4,24 +4,31 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMSequenceDictionary;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.ArgumentCollectionDefinition;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.engine.TraversalParameters;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.*;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Intended to be used as an {@link org.broadinstitute.hellbender.cmdline.ArgumentCollection} for specifying intervals at the command line.
+ * Intended to be used as an @ArgumentCollection for specifying intervals at the command line.
  * Subclasses must override getIntervalStrings and addToIntervalStrings().
  */
-public abstract class IntervalArgumentCollection implements ArgumentCollectionDefinition {
+public abstract class IntervalArgumentCollection implements Serializable {
     private static final Logger logger = LogManager.getLogger(IntervalArgumentCollection.class);
-    protected final IntervalMergingRule intervalMerging = IntervalMergingRule.ALL;
     private static final long serialVersionUID = 1L;
+
+    public static final String EXCLUDE_INTERVALS_LONG_NAME = "exclude-intervals";
+    public static final String EXCLUDE_INTERVALS_SHORT_NAME = "XL";
+    public static final String INTERVAL_SET_RULE_LONG_NAME = "interval-set-rule";
+    public static final String INTERVAL_PADDING_LONG_NAME = "interval-padding";
+    public static final String INTERVAL_EXCLUSION_PADDING_LONG_NAME = "interval-exclusion-padding";
+    public static final String INTERVAL_MERGING_RULE_LONG_NAME = "interval-merging-rule";
 
     /**
      * Subclasses must provide a -L argument and override this to return the results of that argument.
@@ -49,27 +56,45 @@ public abstract class IntervalArgumentCollection implements ArgumentCollectionDe
      * (e.g. -XL myFile.intervals).
      * @return strings gathered from the command line -XL argument to be parsed into intervals to exclude
      */
-    @Argument(fullName = "excludeIntervals", shortName = "XL", doc = "One or more genomic intervals to exclude from processing", optional = true)
+    // Interval list files such as Picard interval lists are structured and require specialized parsing that
+    // is handled by IntervalUtils, so use suppressFileExpansion to bypass command line parser auto-expansion.
+    @Argument(fullName = EXCLUDE_INTERVALS_LONG_NAME, shortName = EXCLUDE_INTERVALS_SHORT_NAME, doc = "One or more genomic intervals to exclude from processing",
+            suppressFileExpansion = true, optional = true, common = true)
     protected final List<String> excludeIntervalStrings = new ArrayList<>();
 
     /**
      * By default, the program will take the UNION of all intervals specified using -L and/or -XL. However, you can
      * change this setting for -L, for example if you want to take the INTERSECTION of the sets instead. E.g. to
-     * perform the analysis only on chromosome 1 exomes, you could specify -L exomes.intervals -L 1 --interval_set_rule
+     * perform the analysis only on chromosome 1 exomes, you could specify -L exomes.intervals -L 1 --interval-set-rule
      * INTERSECTION. However, it is not possible to modify the merging approach for intervals passed using -XL (they will
      * always be merged using UNION).
      *
      * Note that if you specify both -L and -XL, the -XL interval set will be subtracted from the -L interval set.
      */
-    @Argument(fullName = "interval_set_rule", shortName = "isr", doc = "Set merging approach to use for combining interval inputs")
+    @Argument(fullName = INTERVAL_SET_RULE_LONG_NAME, shortName = "isr", doc = "Set merging approach to use for combining interval inputs", common = true)
     protected IntervalSetRule intervalSetRule = IntervalSetRule.UNION;
     /**
-     * Use this to add padding to the intervals specified using -L and/or -XL. For example, '-L 1:100' with a
+     * Use this to add padding to the intervals specified using -L. For example, '-L 1:100' with a
      * padding value of 20 would turn into '-L 1:80-120'. This is typically used to add padding around targets when
      * analyzing exomes.
      */
-    @Argument(fullName = "interval_padding", shortName = "ip", doc = "Amount of padding (in bp) to add to each interval")
+    @Argument(fullName = INTERVAL_PADDING_LONG_NAME, shortName = "ip", doc = "Amount of padding (in bp) to add to each interval you are including.", common = true)
     protected int intervalPadding = 0;
+    /**
+     * Use this to add padding to the intervals specified using -XL. For example, '-XL 1:100' with a
+     * padding value of 20 would turn into '-XL 1:80-120'. This is typically used to add padding around targets when
+     * analyzing exomes.
+     */
+    @Argument(fullName = INTERVAL_EXCLUSION_PADDING_LONG_NAME, shortName= "ixp", doc = "Amount of padding (in bp) to add to each interval you are excluding.", common = true)
+    protected int intervalExclusionPadding = 0;
+
+    /**
+     * By default, the program merges abutting intervals (i.e. intervals that are directly side-by-side but do not
+     * actually overlap) into a single continuous interval. However you can change this behavior if you want them to be
+     * treated as separate intervals instead.
+     */
+    @Argument(fullName = INTERVAL_MERGING_RULE_LONG_NAME, shortName = "imr", doc = "Interval merging rule for abutting intervals", optional = true)
+    protected IntervalMergingRule intervalMergingRule = IntervalMergingRule.ALL;
 
     /**
      * Full parameters for traversal, including our parsed intervals and a flag indicating whether unmapped records
@@ -84,6 +109,34 @@ public abstract class IntervalArgumentCollection implements ArgumentCollectionDe
      */
     public List<SimpleInterval> getIntervals( final SAMSequenceDictionary sequenceDict ){
         return getTraversalParameters(sequenceDict).getIntervalsForTraversal();
+    }
+
+    /**
+     * Get the interval set rule specified on the command line.
+     */
+    public IntervalSetRule getIntervalSetRule() {
+        return intervalSetRule;
+    }
+
+    /**
+     * Get the interval padding specified on the command line.
+     */
+    public int getIntervalPadding() {
+        return intervalPadding;
+    }
+
+    /**
+     * Get the interval exclusion padding specified on the command line.
+     */
+    public int getIntervalExclusionPadding() {
+        return intervalExclusionPadding;
+    }
+
+    /**
+     * Get the interval merging rule specified on the command line.
+     */
+    public IntervalMergingRule getIntervalMergingRule() {
+        return intervalMergingRule;
     }
 
     /**
@@ -118,13 +171,13 @@ public abstract class IntervalArgumentCollection implements ArgumentCollectionDe
             includeSortedSet = GenomeLocSortedSet.createSetFromSequenceDictionary(genomeLocParser.getSequenceDictionary());
         } else {
             try {
-                includeSortedSet = IntervalUtils.loadIntervals(getIntervalStrings(), intervalSetRule, intervalMerging, intervalPadding, genomeLocParser);
+                includeSortedSet = IntervalUtils.loadIntervals(getIntervalStrings(), intervalSetRule, intervalMergingRule, intervalPadding, genomeLocParser);
             } catch( UserException.EmptyIntersection e) {
-                throw new UserException.BadArgumentValue("-L, --interval_set_rule", getIntervalStrings()+","+intervalSetRule, "The specified intervals had an empty intersection");
+                throw new CommandLineException.BadArgumentValue("-L, --" + IntervalArgumentCollection.INTERVAL_SET_RULE_LONG_NAME, getIntervalStrings()+","+intervalSetRule, "The specified intervals had an empty intersection");
             }
         }
 
-        final GenomeLocSortedSet excludeSortedSet = IntervalUtils.loadIntervals(excludeIntervalStrings, IntervalSetRule.UNION, intervalMerging, 0, genomeLocParser);
+        final GenomeLocSortedSet excludeSortedSet = IntervalUtils.loadIntervals(excludeIntervalStrings, IntervalSetRule.UNION, intervalMergingRule, intervalExclusionPadding, genomeLocParser);
         if ( excludeSortedSet.contains(GenomeLoc.UNMAPPED) ) {
             throw new UserException("-XL unmapped is not currently supported");
         }
@@ -138,7 +191,7 @@ public abstract class IntervalArgumentCollection implements ArgumentCollectionDe
             intervals = includeSortedSet.subtractRegions(excludeSortedSet);
 
             if( intervals.isEmpty()){
-                throw new UserException.BadArgumentValue("-L,-XL",getIntervalStrings().toString() + ", "+excludeIntervalStrings.toString(),"The intervals specified for exclusion with -XL removed all territory specified by -L.");
+                throw new CommandLineException.BadArgumentValue("-L,-XL",getIntervalStrings().toString() + ", "+excludeIntervalStrings.toString(),"The intervals specified for exclusion with -XL removed all territory specified by -L.");
             }
             // logging messages only printed when exclude (-XL) arguments are given
             final long toPruneSize = includeSortedSet.coveredSize();

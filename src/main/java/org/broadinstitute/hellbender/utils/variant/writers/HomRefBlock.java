@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.utils.variant.writers;
 
-import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
@@ -9,14 +8,15 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.walkers.variantutils.PosteriorProbabilitiesUtils;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -39,6 +39,7 @@ final class HomRefBlock implements Locatable {
 
     private int end;
     private int[] minPLs = null;
+    private int[] minPPs = null;
 
     /**
      * Create a new HomRefBlock
@@ -49,6 +50,7 @@ final class HomRefBlock implements Locatable {
      */
     public HomRefBlock(final VariantContext startingVC, final int lowerGQBound, final int upperGQBound, final int defaultPloidy) {
         Utils.nonNull(startingVC, "startingVC cannot be null");
+        Utils.validateArg(upperGQBound <= VCFConstants.MAX_GENOTYPE_QUAL + 1, "upperGQBound must be <= " + (VCFConstants.MAX_GENOTYPE_QUAL + 1));
         if ( lowerGQBound > upperGQBound ) { throw new IllegalArgumentException("bad lowerGQBound " + lowerGQBound + " as it's >= upperGQBound " + upperGQBound); }
 
         this.startingVC = startingVC;
@@ -57,33 +59,6 @@ final class HomRefBlock implements Locatable {
         this.minGQ = lowerGQBound;
         this.maxGQ = upperGQBound;
         this.ploidy = startingVC.getMaxPloidy(defaultPloidy);
-    }
-
-    /**
-     * Calculate the genotype Quality by subtracting the first smallest pl from the second smallest
-     *
-     * @param minPLs list of genotype likelihoods
-     * @return the genotype quality based on the pls
-     */
-    @VisibleForTesting
-    static int genotypeQualityFromPLs(final int[] minPLs){
-        if (minPLs == null || minPLs.length < 3){
-            throw new GATKException("minPLs must be at least size 3");
-        }
-
-        final int[] sortedPls = Arrays.copyOf(minPLs, minPLs.length);
-        Arrays.sort(sortedPls);
-
-        if (sortedPls[0] != minPLs[HOM_REF_PL_POSITION]) {
-            throw new GATKException("This should be a home ref block, but the lowest pl was not for hom ref");
-        }
-
-        final int rawQuality = sortedPls[1] - sortedPls[0];
-
-        // cap the quality to the highest quality that will be emitted by the VCFEncoder
-        // this isn't strictly necessary since it will be capped when written anyway
-        // it should help avoid confusion by preventing the quality from changing when written and loaded from disk
-        return Math.min(rawQuality, VCFConstants.MAX_GENOTYPE_QUAL);
     }
 
     /**
@@ -96,7 +71,7 @@ final class HomRefBlock implements Locatable {
      */
     public VariantContext toVariantContext(String sampleName) {
         final VariantContextBuilder vcb = new VariantContextBuilder(getStartingVC());
-        vcb.attributes(new HashMap<>(2)); // clear the attributes
+        vcb.attributes(new LinkedHashMap<>(2)); // clear the attributes
         vcb.stop(getEnd());
         vcb.attribute(VCFConstants.END_KEY, getEnd());
         final Genotype genotype = createHomRefGenotype(sampleName);
@@ -110,31 +85,41 @@ final class HomRefBlock implements Locatable {
         gb.noAD().noPL().noAttributes(); // clear all attributes
 
         final int[] minPLs = getMinPLs();
+        final int[] minPPs = getMinPPs();
         gb.PL(minPLs);
-        gb.GQ(genotypeQualityFromPLs(minPLs));
+        gb.GQ(GATKVariantContextUtils.calculateGQFromPLs(minPPs != null? minPPs : minPLs));
         gb.DP(getMedianDP());
         gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, getMinDP());
+        if (minPPs != null) {
+            gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(minPPs));
+        }
 
         return gb.make();
     }
 
     /**
-     * Add information from this Genotype to this band
-     * @param genotype a non-null Genotype with GQ and DP attributes
+     * Add information from this Genotype to this band.
+     *
+     * Treats GQ values > 99 as 99.
+     *
+     * @param pos Current genomic position. Must be 1 base after the previous position
+     * @param genotype A non-null Genotype with GQ and DP attributes
      */
     public void add(final int pos, final Genotype genotype) {
         Utils.nonNull(genotype, "genotype cannot be null");
         if ( ! genotype.hasPL() ) { throw new IllegalArgumentException("genotype must have PL field");}
         if ( pos != end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
         if ( genotype.getPloidy() != ploidy) { throw new IllegalArgumentException("cannot add a genotype with a different ploidy: " + genotype.getPloidy() + " != " + ploidy); }
-        if ( !withinBounds(genotype.getGQ())) {
+        // Make sure the GQ is within the bounds of this band. Treat GQs > 99 as 99.
+        if ( !withinBounds(Math.min(genotype.getGQ(), VCFConstants.MAX_GENOTYPE_QUAL))) {
             throw new IllegalArgumentException("cannot add a genotype with GQ=" + genotype.getGQ() + " because it's not within bounds ["
                     + this.getGQLowerBound() + ',' + this.getGQUpperBound() + ')');
         }
 
         if( minPLs == null ) {
             minPLs = genotype.getPL();
-        } else { // otherwise take the min with the provided genotype's PLs
+        }
+        else { // otherwise take the min with the provided genotype's PLs
             final int[] pls = genotype.getPL();
             if (pls.length != minPLs.length) {
                 throw new GATKException("trying to merge different PL array sizes: " + pls.length + " != " + minPLs.length);
@@ -143,6 +128,22 @@ final class HomRefBlock implements Locatable {
                 minPLs[i] = Math.min(minPLs[i], pls[i]);
             }
         }
+
+        if( genotype.hasExtendedAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY)) {
+            if (minPPs == null ) {
+                minPPs = PosteriorProbabilitiesUtils.parsePosteriorsIntoPhredSpace(genotype);
+            }
+            else { // otherwise take the min with the provided genotype's PLs
+                final int[] pps = PosteriorProbabilitiesUtils.parsePosteriorsIntoPhredSpace(genotype);
+                if (pps.length != minPPs.length) {
+                    throw new GATKException("trying to merge different PP array sizes: " + pps.length + " != " + minPPs.length);
+                }
+                for (int i = 0; i < pps.length; i++) {
+                    minPPs[i] = Math.min(minPPs[i], pps[i]);
+                }
+            }
+        }
+
         end = pos;
         DPs.add(Math.max(genotype.getDP(), 0)); // DP must be >= 0
     }
@@ -170,6 +171,11 @@ final class HomRefBlock implements Locatable {
     /** Get the min PLs observed within this band, can be null if no PLs have yet been observed */
     public int[] getMinPLs() {
         return minPLs;
+    }
+
+    /** Get the min PPs observed within this band, can be null if no PPs have yet been observed */
+    public int[] getMinPPs() {
+        return minPPs;
     }
 
     int getGQUpperBound() {

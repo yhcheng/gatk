@@ -1,25 +1,118 @@
 package org.broadinstitute.hellbender.utils;
 
+
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.common.primitives.Ints;
 import htsjdk.samtools.util.Log.LogLevel;
 import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.Level;
-import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Arrays.asList;
+import static org.testng.Assert.assertEquals;
 
 /**
  * Testing framework for general purpose utilities class.
  *
  */
-public final class UtilsUnitTest extends BaseTest {
+public final class UtilsUnitTest extends GATKBaseTest {
+
+    @Test
+    public void testForceJVMLocaleToUSEnglish() {
+
+        // Set locale to Canada
+        Locale.setDefault(Locale.CANADA);
+
+        // Force Locale to US English
+        Utils.forceJVMLocaleToUSEnglish();
+
+        // Get the current locale
+        Locale l = Locale.getDefault();
+
+        Assert.assertEquals(l, Locale.US);
+    }
+
+    @Test
+    public void testConcat() {
+        check(ImmutableList.of(ImmutableList.of()), ImmutableList.of());
+        check(ImmutableList.of(ImmutableList.of("a")), ImmutableList.of("a"));
+        check(ImmutableList.of(ImmutableList.of("a", "b")), ImmutableList.of("a", "b"));
+        check(ImmutableList.of(ImmutableList.of("a"), ImmutableList.of("b")), ImmutableList.of("a", "b"));
+        check(ImmutableList.of(ImmutableList.of(), ImmutableList.of("a"), ImmutableList.of("b")), ImmutableList.of("a", "b"));
+        check(ImmutableList.of(ImmutableList.of("a"), ImmutableList.of(), ImmutableList.of("b")), ImmutableList.of("a", "b"));
+        check(ImmutableList.of(ImmutableList.of("a"), ImmutableList.of("b"), ImmutableList.of()), ImmutableList.of("a", "b"));
+        check(ImmutableList.of(ImmutableList.of("a", "b"), ImmutableList.of("c", "d")),
+                ImmutableList.of("a", "b", "c", "d"));
+    }
+
+    private <T> void check(List<? extends Iterable<T>> input, List<T> expected) {
+        assertEquals(Lists.newArrayList(Utils.concatIterators(input.iterator())), expected);
+    }
+
+    @Test
+    public void testTransformParallel() {
+        final Iterator<Integer> integers = Utils.transformParallel(ImmutableList.of(5, 4, 3, 2, 1).iterator(), i -> {
+            try { Thread.sleep(i * 100); } catch (InterruptedException e) { }
+            return i;
+        }, 2);
+        assertEquals(Lists.newArrayList(integers), ImmutableList.of(5, 4, 3, 2, 1));
+    }
+
+    @Test
+    public void testIteratorConcat() throws Exception {
+        final List<Integer> ints1 = Arrays.asList(0, 1, 2);
+        final List<Integer> ints2 = Arrays.asList(3, 4, 5);
+        final Iterator<Integer> it = Utils.concatIterators(Arrays.asList(ints1, ints2).iterator());
+        final List<Integer> lst = Lists.newArrayList(it);
+        Assert.assertEquals(lst, Arrays.asList(0,1,2, 3, 4, 5));
+    }
+
+    @Test
+    public void testTransform() throws Exception {
+        final Iterator<String> it= Arrays.asList("1", "2", "3").iterator();
+        final Iterator<Integer> objectIterator = Utils.transformParallel(it, Integer::parseInt, 1);
+        final List<Integer> lst = Lists.newArrayList(objectIterator);
+        Assert.assertEquals(lst, Arrays.asList(1,2,3));
+    }
+
+    @Test
+    public void testTransformInParallel() throws Exception {
+        final Iterator<String> it= Arrays.asList("1", "2", "3").iterator();
+        final Iterator<Integer> objectIterator = Utils.transformParallel(it, Integer::parseInt, 2);
+        final List<Integer> lst = Lists.newArrayList(objectIterator);
+        Assert.assertEquals(lst, Arrays.asList(1,2,3));
+    }
+
+    @Test
+    public void testXor()  {
+        Assert.assertEquals(Utils.xor(false, false), false);
+        Assert.assertEquals(Utils.xor(false, true),  true);
+        Assert.assertEquals(Utils.xor(true, false),  true);
+        Assert.assertEquals(Utils.xor(true, true),   false);
+    }
+
+    @Test
+    public void testRepeatBytes() throws Exception {
+        Assert.assertEquals(Utils.repeatBytes((byte)112, 4), new byte[]{112,112,112,112});
+    }
+
+    @Test
+    public void testRepeatChars() throws Exception {
+        Assert.assertEquals(Utils.repeatChars('a', 4), new byte[]{'a','a','a','a'});
+    }
 
     @Test
     public void testMakePermutations(){
@@ -259,7 +352,7 @@ public final class UtilsUnitTest extends BaseTest {
         final byte[] sourceBytes = IOUtils.readFileIntoByteArray(source);
         Assert.assertEquals(Utils.calcMD5(sourceBytes), sourceMD5);
 
-        final String sourceString = FileUtils.readFileToString(source);
+        final String sourceString = FileUtils.readFileToString(source, StandardCharsets.UTF_8);
         Assert.assertEquals(Utils.calcMD5(sourceString), sourceMD5);
 
         Assert.assertEquals(Utils.calculateFileMD5(source), sourceMD5);
@@ -313,17 +406,17 @@ public final class UtilsUnitTest extends BaseTest {
     }
 
 
-    @Test
-    public void testSuccessfulRegularReadableFileCheck() {
-        final File expectedFile = createTempFile("Utils-RRFC-test",".txt");
-        final File actualFile = Utils.regularReadableUserFile(expectedFile);
-        Assert.assertSame(actualFile, expectedFile);
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testCheckForDuplicatesWithDuplicates() {
+        final List<String> strings = Arrays.asList("A", "B", "B");
+        Utils.checkForDuplicatesAndReturnSet(strings, "Uh-oh");
     }
 
-    @Test(dataProvider = "unsuccessfulRegularReadableFileCheckData",
-            expectedExceptions = UserException.CouldNotReadInputFile.class)
-    public void testUnsuccessfulRegularReadableFileCheck(final File file) {
-        Utils.regularReadableUserFile(file);
+    @Test
+    public void testCheckForDuplicatesWithoutDuplicates() {
+        final List<String> strings = Arrays.asList("A", "B", "C", "E", "D");
+        final Set<String> set = Utils.checkForDuplicatesAndReturnSet(strings, "Uh-oh");
+        Assert.assertEquals(strings.stream().sorted().collect(Collectors.toList()), set.stream().sorted().collect(Collectors.toList()));
     }
 
     @Test(dataProvider = "successfulValidIndexData")
@@ -335,21 +428,6 @@ public final class UtilsUnitTest extends BaseTest {
     @Test(dataProvider = "unsuccessfulValidIndexData", expectedExceptions = IllegalArgumentException.class)
     public void testUnsuccessfulValidIndex(final int index, final int length) {
         Utils.validIndex(index, length);
-    }
-
-    @DataProvider(name = "unsuccessfulRegularReadableFileCheckData")
-    @SuppressWarnings("all")
-    public Object[][] unsuccessfulRegularReadableFileCheckData() {
-        final File directory = createTempFile("Utils-RRFCD-Dir", ".dir");
-        directory.delete();
-        directory.mkdir();
-        final File nonExistingFile = createTempFile("Utils-RRFCD-NoFile", ".file");
-        nonExistingFile.delete();
-        final File nonReadable = createTempFile("Utils-RRFCD-NoReadable", ".file");
-        nonReadable.setReadable(false);
-        return new Object[][]{
-                {directory}, {nonExistingFile}, {nonReadable}
-        };
     }
 
     @DataProvider(name = "successfulValidIndexData")
@@ -404,11 +482,12 @@ public final class UtilsUnitTest extends BaseTest {
     }
 
     /**
-     * Test setting the global logging level for Picard and Log4j and java.util.logging.
+     * Test setting the global logging level for Picard, Log4j, MinLog and java.util.logging.
      *
      * Note that there are three very similar, but not identical, logging level enums from different namespaces
      * being used here. The one used by Picard (and Hellbender --verbosity) of type "Log.LogLevel", the parallel
      * one used by log4j of type "Level", and the one used by java.utils.logging.
+     *
      */
     @Test
     public void testSetLoggingLevel() {
@@ -505,5 +584,398 @@ public final class UtilsUnitTest extends BaseTest {
     public void testEqualRange(byte[] arr1, int from, int to, byte[] arr2, boolean expected) throws Exception {
         //Note 'from' is inclusive, 'to' is exclusive
         Assert.assertEquals(Utils.equalRange(arr1, from, arr2, 0, to - from), expected);
+    }
+
+    @Test
+    public void testLastIndexOfQueryTooLong() {
+        final String reference = "AAAA";
+        final String query     = "AAAAAAA";
+
+        final int result = Utils.lastIndexOf(reference.getBytes(), query.getBytes());
+        final int expected = reference.lastIndexOf(query);
+        Assert.assertEquals(result, expected);
+    }
+
+    @Test
+    public void testLastIndexOfLastBoundaries() {
+        final String reference = "AAAACCCCTTTTGGGG";
+
+        // match right boundary of reference
+        String query = "TGGGG";
+        int result = Utils.lastIndexOf(reference.getBytes(), query.getBytes());
+        int expected = reference.lastIndexOf(query);
+        Assert.assertEquals(result, expected);
+
+        // match left boundary of reference
+        query = "AAAAC";
+        result = Utils.lastIndexOf(reference.getBytes(), query.getBytes());
+        expected = reference.lastIndexOf(query);
+        Assert.assertEquals(result, expected);
+    }
+
+    private void randomByteString(Random rng, byte[] bytes) {
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte)(rng.nextInt(94) + 32);
+        }
+    }
+
+    @Test
+    public void testLastIndexOfRandom() {
+        final int num_tests = 100;
+        final int referenceLength = 1000;
+        final int queryLength = 100;
+        
+        byte [] reference = new byte[referenceLength];
+        byte [] query = new byte[queryLength];
+
+        final Random rng = Utils.getRandomGenerator();
+        
+        for (int i = 0; i < num_tests; i++) {
+            randomByteString(rng, reference);
+            randomByteString(rng, query);
+
+            // add query to reference at a random location for 75% of the tests
+            if (i % 4 > 0) {
+                final int index = rng.nextInt(referenceLength - queryLength);
+                for (int j = 0; j < queryLength; j++) {
+                    reference[index+j] = query[j];
+                }
+            }
+            
+            final int result = Utils.lastIndexOf(reference, query);
+            final int expected = new String(reference).lastIndexOf(new String(query));
+            Assert.assertEquals(result, expected);
+        }
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testListFromPrimitivesNull() throws Exception {
+        Utils.listFromPrimitives(null);
+    }
+
+    @Test
+    public void testListFromPrimitivesEmpty() throws Exception {
+        Assert.assertTrue(Utils.listFromPrimitives(new int[0]).isEmpty());
+    }
+
+    @Test
+    public void testListFromPrimitivesNoneEmpty() throws Exception {
+        Assert.assertEquals(Utils.listFromPrimitives(new int[]{1,2}), Arrays.asList(1,2));
+    }
+
+    @DataProvider
+    public Object[][] getNonNullCollections(){
+        final List<String> someValues = Arrays.asList("some", "values");
+        return new Object[][]{
+                {Collections.emptyList()},
+                {Collections.emptySet()},
+                {someValues},
+                {new HashSet<>(someValues)},
+                {new TreeSet<>(someValues)},
+        };
+    }
+
+    @DataProvider
+    public Object[][] getCollectionsWithNulls(){
+        return new Object[][]{
+                {null},
+                {Arrays.asList("something", null)},
+                {Sets.newHashSet("something", null)},
+        };
+    }
+
+    @Test(dataProvider = "getNonNullCollections")
+    public void testContainsNoNull(Collection<?> collection){
+        Utils.containsNoNull(collection, "bad");
+    }
+
+    @Test(dataProvider = "getCollectionsWithNulls", expectedExceptions = IllegalArgumentException.class)
+    public void testContainsNull( Collection<?> collection){
+        Utils.containsNoNull(collection, "This was expected");
+    }
+
+    @Test
+    public void testNonEmptyString() {
+        Assert.assertThrows(IllegalArgumentException.class, () -> Utils.nonEmpty((String)null, "deliberately empty"));
+        Assert.assertThrows(IllegalArgumentException.class, () -> Utils.nonEmpty("", "deliberately empty" ));
+        Utils.nonEmpty("this is not empty");
+    }
+
+    @Test
+    public void testStreamFromIterable() {
+        final int[] array = new int[] {1,3,5,7,9};
+        Assert.assertTrue(Arrays.equals(array, Utils.stream(Ints.asList(array)).mapToInt(n -> n).toArray()));
+    }
+
+    @Test
+    public void testStreamFromIterator() {
+        final int[] array = new int[] {1,3,5,7,9};
+        Assert.assertEquals(array, Utils.stream(Ints.asList(array).iterator()).mapToInt(n -> n).toArray());
+    }
+
+    @DataProvider
+    public Object[][] getCollectionsForDuplicatedItemsTest() {
+        return new Object[][] {
+                {Collections.emptyList(), Collections.emptySet()},
+                {Collections.singletonList("U"), Collections.emptySet()},
+                {Arrays.asList("U1", "U2"), Collections.emptySet()},
+                {Arrays.asList("D", "D"), Collections.singleton("D")},
+                {Arrays.asList("U", "D", "D"), Collections.singleton("D")},
+                {Arrays.asList("D", "U", "D"), Collections.singleton("D")},
+                {Arrays.asList("D", "D", "U"), Collections.singleton("D")},
+                {Arrays.asList("D1", "D1", "D2", "D2"), new HashSet<>(Arrays.asList("D1", "D2"))},
+                {Arrays.asList("D1", "D2", "D1", "D2"), new HashSet<>(Arrays.asList("D1", "D2"))},
+                {Arrays.asList("D1", "D2", "D2", "D1"), new HashSet<>(Arrays.asList("D1", "D2"))}
+        };
+    }
+
+    @Test(dataProvider = "getCollectionsForDuplicatedItemsTest")
+    public void testGetDuplicatedItems(final Collection<?> collection, final Set<?> duplicated) {
+        final Set<?> result = Utils.getDuplicatedItems(collection);
+        Assert.assertEquals(result, duplicated);
+    }
+
+    @DataProvider
+    public Iterator<Object[]> provideDataForTestUtilsSplitString() {
+
+        final String stringData = "The quick fox jumped over the lazy brown dog.  " +
+                "Arma virumque cano, Troiae qui primus ab oris " +
+                "Italiam, fato profugus, Laviniaque venit " +
+                "litora, multum ille et terris iactatus et alto " +
+                "vi superum saevae memorem Iunonis ob iram; " +
+                "multa quoque et bello passus, testConfigurationSorting conderet urbem, " +
+                "inferretque deos Latio, genus unde Latinum, " +
+                "Albanique patres, atque altae moenia Romae.  " +
+                "Musa, mihi causas memora, quo numine laeso, " +
+                "quidve dolens, regina deum tot volvere casus " +
+                "insignem pietate virum, tot adire labores " +
+                "impulerit. Tantaene animis caelestibus irae9";
+
+        final List<String> wordsToSplitOn = Arrays.stream(stringData.split(" "))
+                .map(ssss -> (ssss.contains("?")) ? ssss.replace("?", "\\?") : ssss)
+                .collect(Collectors.toList());
+
+        final List<String> repeatedSubstringsToSplitOn = Arrays.asList( "us", "is", "it", "et", " et", " et ", "que ", " mult" );
+
+        final String allDelimiterTestString = "::::::::::::::::::::::::::::::";
+        final String frontDelimiterTestString = "::::::::::1:23::::::::::456:7890";
+        final String middleDelimiterTestString = "1:23::::::::::456:7890";
+        final String backDelimiterTestString = "1:23::::::::::456:7890::::::::::";
+        final String fullDelimiterTestString = "::::::::::1:23::::::::::456:7890::::::::::";
+
+        final List<Object[]> testCases = new ArrayList<>();
+        testCases.addAll(
+            Arrays.asList(
+                new Object[] { "", "" },
+                new Object[] { ":", "" },
+                new Object[] { "SOME MORE TESTS", "" },
+                new Object[] { ":", ":" },
+                new Object[] { stringData, ""  },
+                new Object[] { stringData, "1" },
+                new Object[] { stringData, "a" },
+                new Object[] { stringData, "b" },
+                new Object[] { stringData, "c" },
+                new Object[] { stringData, "d" },
+                new Object[] { stringData, "e" },
+                new Object[] { stringData, "f" },
+                new Object[] { stringData, "g" },
+                new Object[] { stringData, "h" },
+                new Object[] { stringData, "i" },
+                new Object[] { stringData, "j" },
+                new Object[] { stringData, "k" },
+                new Object[] { stringData, "l" },
+                new Object[] { stringData, "m" },
+                new Object[] { stringData, "n" },
+                new Object[] { stringData, "o" },
+                new Object[] { stringData, "p" },
+                new Object[] { stringData, "q" },
+                new Object[] { stringData, "r" },
+                new Object[] { stringData, "s" },
+                new Object[] { stringData, "t" },
+                new Object[] { stringData, "u" },
+                new Object[] { stringData, "v" },
+                new Object[] { stringData, "w" },
+                new Object[] { stringData, "x" },
+                new Object[] { stringData, "y" },
+                new Object[] { stringData, "z" },
+                new Object[] { stringData, " " },
+                new Object[] { stringData, "T" },
+                new Object[] { stringData, "9" },
+                new Object[] { allDelimiterTestString,    ":" },
+                new Object[] { frontDelimiterTestString,  ":" },
+                new Object[] { middleDelimiterTestString, ":" },
+                new Object[] { backDelimiterTestString ,  ":" },
+                new Object[] { fullDelimiterTestString ,  ":" },
+                new Object[] { allDelimiterTestString.replace(":", "TS"),    "TS" },
+                new Object[] { frontDelimiterTestString.replace(":", "TS"),  "TS" },
+                new Object[] { middleDelimiterTestString.replace(":", "TS"), "TS" },
+                new Object[] { backDelimiterTestString.replace(":", "TS") ,  "TS" },
+                new Object[] { fullDelimiterTestString.replace(":", "TS") ,  "TS" }
+            )
+        );
+
+        // Create test cases for words:
+        for ( final String delim : wordsToSplitOn ) {
+            testCases.add( new Object[] { stringData, delim } );
+        }
+
+        // Create test cases for repeated substrings:
+        for ( final String delim : repeatedSubstringsToSplitOn ) {
+            testCases.add( new Object[] { stringData, delim } );
+        }
+
+        return testCases.iterator();
+    }
+
+    @DataProvider
+    private Iterator<Object[]> provideDataForTestUtilsSplitStringExhaustively() {
+
+        // Length that we want to test through:
+        final int maxStringLength = 7;
+
+        // Create single character delimiter strings:
+        final String singleCharDelimiter = "o";
+        final List<String> singleCharTestStrings = Arrays.asList("X", singleCharDelimiter);
+        final List<List<String>> exhaustiveListsForSingleChar = Utils.makePermutations( singleCharTestStrings, maxStringLength, true );
+
+        // Create multi-character delimiter strings:
+        final String multiCharDelimiter = "oz";
+
+        // Must include the individual characters of the multi-char delimiter here
+        // so we can pass them into Utils.makePermutations to create the permutations of strings to split.
+        final List<String> multiCharTestStrings = Arrays.asList("X", "o", "z", multiCharDelimiter);
+        final List<List<String>> exhaustiveListsForMultiChar = Utils.makePermutations( multiCharTestStrings, maxStringLength, true );
+
+        final List<Object[]> testCases = new ArrayList<>();
+
+        // Add single-char cases:
+        for ( final List<String> testCase : exhaustiveListsForSingleChar ) {
+            testCases.add( new Object[] { String.join( "", testCase ), singleCharDelimiter } );
+        }
+
+        // Add multi-char cases:
+        for ( final List<String> testCase : exhaustiveListsForMultiChar ) {
+            testCases.add( new Object[] { String.join( "", testCase ), multiCharDelimiter } );
+        }
+
+        return testCases.iterator();
+    }
+
+    private void exhaustiveStringSplitHelper(final String str,
+                                             final String delimiter) {
+        List<String> splitStrings;
+        if ( delimiter.length() == 1 ) {
+            splitStrings = Utils.split( str, delimiter.charAt(0) );
+            Assert.assertEquals( splitStrings, Arrays.asList(str.split(delimiter)) );
+        }
+
+        splitStrings = Utils.split(str, delimiter);
+        Assert.assertEquals( splitStrings, Arrays.asList(str.split(delimiter)) );
+    }
+
+    @Test(dataProvider = "provideDataForTestUtilsSplitString")
+    public void testUtilsSplitString( final String str, final String delimiter ) {
+        exhaustiveStringSplitHelper(str, delimiter);
+    }
+
+    @Test(dataProvider = "provideDataForTestUtilsSplitStringExhaustively")
+    public void testUtilsSplitStringExhaustively( final String str, final String delimiter ) {
+        exhaustiveStringSplitHelper(str, delimiter);
+    }
+
+    @DataProvider
+    public Object[][] provideGetReverseValueToListMap() {
+        return new Object[][]{
+                {ImmutableMap.of("Foo", Arrays.asList(1, 2, 3)),
+                        ImmutableMap.of(1, Sets.newHashSet("Foo"), 2, Sets.newHashSet("Foo"), 3, Sets.newHashSet("Foo"))},
+                {ImmutableMap.of("Foo", Arrays.asList(1, 2, 3), "Baz", Arrays.asList(1, 2)),
+                        ImmutableMap.of(1, Sets.newHashSet("Foo", "Baz"), 2, Sets.newHashSet("Foo", "Baz"), 3, Sets.newHashSet("Foo"))},
+
+                // Let's throw in some nulls
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList("one", "two", "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))},
+
+                // Let's throw in some nulls again
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList(null, "two", "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(null, Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))},
+
+                    // Let's throw in some nulls again and a non-string
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList(null, 2, "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(null, Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(2, Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))}
+        };
+    }
+
+    @Test(dataProvider = "provideGetReverseValueToListMap")
+    public <T,U> void testGetReverseValueToListMap(final Map<T, List<U>> input,  final Map<U, Set<T>> gtOutput) {
+        Assert.assertEquals(Utils.getReverseValueToListMap(input), gtOutput);
+    }
+
+    @DataProvider
+    public Iterator<Object[]> provideDataForTestUtilsFormatting() {
+        final List<Object[]> testCases = new ArrayList<>();
+        testCases.addAll(Arrays.asList(
+                new Object[]{1, 2, "50.00", "0.50"},
+                new Object[]{0, 3, "0.00", "0.00"},
+                new Object[]{1, 3, "33.33", "0.33"},
+                new Object[]{50, 3000, "1.67", "0.02"},
+                new Object[]{50, 0, "NA", "NA"},
+                new Object[]{0, 0, "NA", "NA"}
+        ));
+
+        return testCases.iterator();
+    }
+
+    @Test(dataProvider = "provideDataForTestUtilsFormatting")
+    public void testFormattedPctAndRatio(final long input1, final long input2, final String formattedPct, final String formattedRatio) {
+        Assert.assertEquals(Utils.formattedPercent(input1, input2), formattedPct);
+        Assert.assertEquals(Utils.formattedRatio(input1, input2), formattedRatio);
+    }
+
+    @DataProvider(name="provideDataForTestFilterCollectionByExpressions")
+    public Object[][] provideDataForTestFilterCollectionByExpressions() {
+        return new Object[][] {
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a"), true, new LinkedHashSet<>(Arrays.asList("a")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("b"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("b"), false, new LinkedHashSet<>(Arrays.asList("ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "b"), true, new LinkedHashSet<>(Arrays.asList("a")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "b"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "ab"), true, new LinkedHashSet<>(Arrays.asList("a", "ab")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "ab"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*b.*"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*b.*"), false, new LinkedHashSet<>(Arrays.asList("ab", "abc") )},
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc") )}
+        };
+    }
+
+    @Test(dataProvider = "provideDataForTestFilterCollectionByExpressions")
+    public void testTestFilterCollectionByExpressions(Set<String> values, Collection<String> filters, boolean exactMatch, Set<String> expected) {
+        Set<String> actual = Utils.filterCollectionByExpressions(values, filters, exactMatch);
+        Assert.assertEquals(actual, expected);
     }
 }

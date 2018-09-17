@@ -2,14 +2,21 @@ package org.broadinstitute.hellbender.utils.read;
 
 import htsjdk.samtools.*;
 import org.apache.commons.lang3.ArrayUtils;
+import org.broadinstitute.gatk.nativebindings.smithwaterman.SWOverhangStrategy;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanJavaAligner;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAlignment;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.*;
+import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 public final class AlignmentUtilsUnitTest {
     private final static boolean DEBUG = false;
@@ -62,6 +69,268 @@ public final class AlignmentUtilsUnitTest {
 
         return combinations;
     }
+
+
+    /******************************************************
+     * Tests for AlignmentUtils.createReadAlignedToRef()
+     ******************************************************/
+
+    private Haplotype makeHaplotypeForAlignedToRefTest(final String bases, final String cigar) {
+        final Haplotype hap = new Haplotype(bases.getBytes());
+        hap.setCigar(TextCigarCodec.decode(cigar));
+        return hap;
+    }
+
+    private GATKRead makeReadForAlignedToRefTest(final String baseString) {
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, 10);
+        final byte[] bases = baseString.getBytes();
+        read.setBases(bases.clone());
+        read.setBaseQualities(Utils.dupBytes((byte)30, read.getLength()));
+        return read;
+    }
+
+    @DataProvider(name = "ReadAlignedToRefData")
+    public Object[][] makeReadAlignedToRefData() {
+        List<Object[]> tests = new ArrayList<>();
+
+        final String hapBases = "ACTGAAGGTTCC";
+        final Haplotype allM = makeHaplotypeForAlignedToRefTest(hapBases, hapBases.length() + "M");
+
+        // make sure we get back a cigar of the right length
+        for ( int i = -1; i < hapBases.length(); i++ ) {
+            final GATKRead read = makeReadForAlignedToRefTest(hapBases);
+            final byte[] bases = read.getBases();
+            if ( i != -1 ) {
+                bases[i] = (byte)'A';
+            }
+            read.setBases(bases);
+            tests.add(new Object[]{read, allM, allM, 10, 10, allM.getCigar().toString()});
+        }
+
+        // make sure insertions at the front are correctly handled
+        for ( int padFront = 1; padFront < 10; padFront++ ) {
+            final GATKRead read = makeReadForAlignedToRefTest(Utils.dupString("N", padFront) + hapBases);
+            tests.add(new Object[]{read, allM, allM, 10, 10, padFront + "I" + allM.getCigar().toString()});
+        }
+
+        // make sure insertions at the back are correctly handled
+        for ( int padBack = 1; padBack < 10; padBack++ ) {
+            final GATKRead read = makeReadForAlignedToRefTest(hapBases + Utils.dupString("N", padBack));
+            tests.add(new Object[]{read, allM, allM, 10, 10, allM.getCigar().toString() + padBack + "I"});
+        }
+
+        // make sure refStart and hapStart are respected
+        for ( int refStart = 1; refStart < 10; refStart++ ) {
+            for ( int hapStart = refStart; hapStart < 10 + refStart; hapStart++ ) {
+                final Haplotype hap = new Haplotype(allM.getBases());
+                hap.setCigar(allM.getCigar());
+                hap.setAlignmentStartHapwrtRef(hapStart);
+
+                final GATKRead read = makeReadForAlignedToRefTest(new String(hap.getBases()));
+                tests.add(new Object[]{read, hap, allM, refStart, refStart + hapStart, allM.getCigar().toString()});
+            }
+        }
+
+        // example case of bad alignment because SW doesn't necessarily left-align indels
+        {
+            final String hap = "ACTGTGGGTTCCTCTTATTTTATTTCTACATCAATGTTCATATTTAACTTATTATTTTATCTTATTTTTAAATTTCTTTTATGTTGAGCCTTGATGAAAGCCATAGGTTCTCTCATATAATTGTATGTGTATGTATGTATATGTACATAATATATACATATATGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTGTATTACATAATATATACATATATGTATATATTATGTATATGTACATAATATATACATATATG";
+            final String hapCigar = hap.length() + "M";
+            final String readBases = "ATGTACATAATATATACATATATGTATATGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTACATAATATATACGTATATGTATGTGTATGTGTATTACATAATATATACATATATGTATATATTATGTATATGTACATAATAT";
+            final GATKRead read = makeReadForAlignedToRefTest(readBases);
+            final int refStart = 10130100;
+            final int hapStart = 500;
+            final String badCigar = "31M6D211M";
+            final String goodCigar = "28M6D214M";
+            final Haplotype badHap = new Haplotype(hap.getBytes());
+            badHap.setCigar(TextCigarCodec.decode(hapCigar));
+            badHap.setAlignmentStartHapwrtRef(hapStart);
+
+            final int expectedPos = 10130740;
+            tests.add(new Object[]{read, badHap, badHap, refStart, expectedPos, goodCigar});
+        }
+
+        // example where left-align generates a leading deletion
+        {
+            final String ref = "CTGAACGTAACCAAAATCAATATGGATACTGAGAAATACTATTTAATAAAGACATAAATTAGACTGCTAAAAAAAATTAAAGAAATTTCAAAAGAGAATCCACCTCTTTTCCTTGCCAGTGCTCAAAAGTGAGTGTGAATCTGGTGGCTGTGGGGCTGTTTTTGGTGTGGCTCTTTGGACCAGCCTGCCTGGTAATTCAAGCCTGCCTCTCATTTCTG";
+            // ref-to-hap:      ||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||.|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+            final String hap = "CTGAACGTAACCAAAATCAATATGGATACTGAGAAATACTATTTAATAAAGACATAAATTAGACTGCTAAAAAAAATTAAAGAAATTTCAAAAGAGAATCCACCTCTTTTCCTTGCCAGTGCTCAAAAGTGAGTGTGAATCTGGTGGCTGCGGGGCTGTTTTTGGTGTGGCTCTTTGGACCAGCCTGCCTGGTAATTCAAGCCTGCCTCTCATTTCTG";
+            // hap-to-read:                                                                                                                                                               ||||.|||||||||||||||||
+            // aligned read:                                                                                                                                                              GCTGCTTTTGGTGTGGCTCTTT
+            final String readBases = "GCTGCTTTTGGTGTGGCTCTTT";
+            final String hapCigar = hap.length() + "M";
+            final GATKRead read = makeReadForAlignedToRefTest(readBases);
+            final int refStart = 215239171;
+            final int hapStart = 575;
+            final int alignmentOffset = 154;
+            final String goodCigar = "22M";
+            final Haplotype badHap = new Haplotype(hap.getBytes());
+            badHap.setCigar(TextCigarCodec.decode(hapCigar));
+            badHap.setAlignmentStartHapwrtRef(hapStart);
+            final Haplotype refHap = makeHaplotypeForAlignedToRefTest(ref, ref.length() + "M");
+
+            final int expectedPos = refStart + hapStart + alignmentOffset;
+            tests.add(new Object[]{read, badHap, refHap, refStart, expectedPos, goodCigar});
+         }
+
+        // example where the haplotype has an indel relative to reference
+        {
+            final String ref = "GGGATCCTGCTACAAAGGTGAAACCCAGGAGAGTGTGGAGTCCAGAGTGTTGCCAGGACCCAGGCACAGGCATTAGTGCCCGTTGGAGAAAACAGGGGAATCCCGAAGAAATGGTGGGTCCTGGCCATCCGTGAGATCTTCCCAGGGCAGCTCCCCTCTGTGGAATCCAATCTGTCTTCCATCCTGC";
+            // ref-to-hap:      |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||^^||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+            final String hap = "GGGATCCTGCTACAAAGGTGAAACCCAGGAGAGTGTGGAGTCCAGAGTGTTGCCAGGACCCAGGCACAGGCATTAGTGCCCGTTGGAGAAAACGGGAATCCCGAAGAAATGGTGGGTCCTGGCCATCCGTGAGATCTTCCCAGGGCAGCTCCCCTCTGTGGAATCCAATCTGTCTTCCATCCTGC";
+            // hap-to-read:                                                                                                                              .|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+            // aligned read:                                                                                                                             CCCATCCGTGAGATCTTCCCAGGGCAGCTCCCCTCTGTGGAATCCAATCTGTCTTCCATCCTGC
+            final String readBases = "CCCATCCGTGAGATCTTCCCAGGGCAGCTCCCCTCTGTGGAATCCAATCTGTCTTCCATCCTGC";
+            final String hapCigar = "93M2D92M";
+            final GATKRead read = makeReadForAlignedToRefTest(readBases);
+            final int refStart = 13011;
+            final int hapStart = 553;
+            final int alignmentOffset = 123;
+            final String goodCigar = "64M";
+            final Haplotype badHap = new Haplotype(hap.getBytes());
+            badHap.setCigar(TextCigarCodec.decode(hapCigar));
+            badHap.setAlignmentStartHapwrtRef(hapStart);
+            final Haplotype refHap = makeHaplotypeForAlignedToRefTest(ref, ref.length() + "M");
+
+            final int expectedPos = refStart + hapStart + alignmentOffset;
+            tests.add(new Object[]{read, badHap, refHap, refStart, expectedPos, goodCigar});
+         }
+
+        return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "ReadAlignedToRefData")
+    public void testReadAlignedToRef(final GATKRead read, final Haplotype haplotype, final Haplotype refHaplotype, final int refStart, final int expectedReadStart, final String expectedReadCigar) throws Exception {
+        final GATKRead originalReadCopy = read.copy();
+
+        if ( expectedReadCigar == null ) {
+            Assert.assertNull(AlignmentUtils.createReadAlignedToRef(read, haplotype, refHaplotype, refStart, true, SmithWatermanJavaAligner
+                    .getInstance()));
+        } else {
+            final Cigar expectedCigar = TextCigarCodec.decode(expectedReadCigar);
+            final GATKRead alignedRead = AlignmentUtils.createReadAlignedToRef(read, haplotype, refHaplotype, refStart, true, SmithWatermanJavaAligner
+                    .getInstance());
+
+            Assert.assertEquals(alignedRead.getName(), originalReadCopy.getName());
+            Assert.assertEquals(alignedRead.getStart(), expectedReadStart);
+            Assert.assertEquals(alignedRead.getBases(), originalReadCopy.getBases());
+            Assert.assertEquals(alignedRead.getBaseQualities(), originalReadCopy.getBaseQualities());
+            Assert.assertEquals(alignedRead.getStart(), expectedReadStart);
+            Assert.assertEquals(alignedRead.getCigar(), expectedCigar);
+            Assert.assertNotNull(alignedRead.getAttributeAsInteger("HC"));
+        }
+
+        Assert.assertEquals(read, originalReadCopy, "createReadAlignedToRef seems be modifying the original read!");
+    }
+
+    private static class Mutation implements Comparable<Mutation> {
+        int pos, len;
+        CigarOperator operator;
+
+        private Mutation(int pos, int len, CigarOperator operator) {
+            this.pos = pos;
+            this.len = len;
+            this.operator = operator;
+        }
+        public int getNMismatches() { return len; }
+
+        @Override
+        public int compareTo(Mutation o) {
+            return Integer.valueOf(pos).compareTo(o.pos);
+        }
+
+        private String apply(final String seq) {
+            switch ( operator ) {
+                case M:
+                    final byte[] bases = seq.getBytes();
+                    if ( pos < seq.length() )
+                        bases[pos] = (byte)(bases[pos] == 'A' ? 'C' : 'A');
+                    return new String(bases);
+                case I: {
+                    final String prefix = seq.substring(0, pos);
+                    final String postfix = seq.substring(pos, seq.length());
+                    return prefix + "GTCAGTTA".substring(0, len) + postfix;
+                } case D: {
+                    final String prefix = seq.substring(0, pos);
+                    final String postfix = seq.substring(pos + len, seq.length());
+                    return prefix + postfix;
+                }default:
+                    throw new IllegalStateException("Unexpected operator " + operator);
+            }
+        }
+    }
+
+    private static class MutatedSequence {
+        int numMismatches;
+        String seq;
+
+        private MutatedSequence(int numMismatches, String seq) {
+            this.numMismatches = numMismatches;
+            this.seq = seq;
+        }
+    }
+
+    private MutatedSequence mutateSequence(final String hapIn, final List<Mutation> mutations) {
+        Collections.sort(mutations);
+        int mismatches = 0;
+        String hap = hapIn;
+        for ( final Mutation mut : mutations ) {
+            hap = mut.apply(hap);
+            mismatches += mut.getNMismatches();
+        }
+        return new MutatedSequence(mismatches, hap);
+    }
+
+    @DataProvider(name = "ComplexReadAlignedToRef")
+    public Object[][] makeComplexReadAlignedToRef() {
+        List<Object[]> tests = new ArrayList<>();
+
+        final List<Mutation> allMutations = Arrays.asList(
+                new Mutation(1, 1, CigarOperator.M),
+                new Mutation(2, 1, CigarOperator.M),
+                new Mutation(3, 1, CigarOperator.I),
+                new Mutation(7, 1, CigarOperator.D)
+        );
+
+        int i = 0;
+        final String referenceBases  = "ACTGACTGACTG";
+        final String paddedReference = "NNNN" + referenceBases + "NNNN";
+        for ( final List<Mutation> mutations : Utils.makePermutations(allMutations, 3, false) ) {
+            final MutatedSequence hap = mutateSequence(referenceBases, mutations);
+            final Haplotype haplotype = new Haplotype(hap.seq.getBytes());
+            final SmithWatermanAlignment align = SmithWatermanJavaAligner.getInstance()
+                    .align(paddedReference.getBytes(), hap.seq.getBytes(), SmithWatermanAligner.ORIGINAL_DEFAULT, SWOverhangStrategy.SOFTCLIP);
+            haplotype.setAlignmentStartHapwrtRef(align.getAlignmentOffset());
+            haplotype.setCigar(align.getCigar());
+
+            for ( final List<Mutation> readMutations : Utils.makePermutations(allMutations, 3, false) ) {
+                final MutatedSequence readBases = mutateSequence(hap.seq, readMutations);
+                final GATKRead read = makeReadForAlignedToRefTest(readBases.seq);
+                tests.add(new Object[]{i++, read, paddedReference, haplotype, hap.numMismatches + readBases.numMismatches});
+            }
+        }
+
+        // for convenient testing of a single failing case
+        //tests.add(new Object[]{makeRead("ACCGGGACTGACTG"), reference, makeHaplotype("AAAGGACTGACTG", "1M1I11M"), 2});
+
+        return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "ComplexReadAlignedToRef")
+    public void testReadAlignedToRefComplexAlignment(final int testIndex, final GATKRead read, final String reference, final Haplotype haplotype, final int expectedMaxMismatches) throws Exception {
+        final GATKRead alignedRead = AlignmentUtils.createReadAlignedToRef(read, haplotype, new Haplotype(reference.getBytes(),true), 1, true, SmithWatermanJavaAligner
+                .getInstance());
+        if ( alignedRead != null ) {
+            final int mismatches = AlignmentUtils.getMismatchCount(alignedRead, reference.getBytes(), alignedRead.getStart() - 1).numMismatches;
+            Assert.assertTrue(mismatches <= expectedMaxMismatches,
+                    "Alignment of read to ref looks broken.  Expected at most " + expectedMaxMismatches + " but saw " + mismatches
+                            + " for readBases " + new String(read.getBases()) + " with cigar " + read.getCigar() + " reference " + reference + " haplotype "
+                            + haplotype + " with cigar " + haplotype.getCigar() + " aligned read cigar " + alignedRead.getCigar().toString() + " @ " + alignedRead.getStart());
+        }
+    }
+
+    /**********************************************************
+     * End of Tests for AlignmentUtils.createReadAlignedToRef()
+     **********************************************************/
 
 
     @DataProvider(name = "CalcNumDifferentBasesData")
@@ -434,6 +703,28 @@ public final class AlignmentUtilsUnitTest {
         Assert.assertEquals(actual, expectedResult, "Wrong alignment offset detected for cigar " + cigar.toString());
     }
 
+    @Test
+    public void testIsInsideDeletion() {
+        final List<CigarElement> cigarElements = Arrays.asList(new CigarElement(5, CigarOperator.S),
+                new CigarElement(5, CigarOperator.M),
+                new CigarElement(5, CigarOperator.EQ),
+                new CigarElement(6, CigarOperator.N),
+                new CigarElement(5, CigarOperator.X),
+                new CigarElement(6, CigarOperator.D),
+                new CigarElement(1, CigarOperator.P),
+                new CigarElement(1, CigarOperator.H));
+        final Cigar cigar = new Cigar(cigarElements);
+        for ( int i=-1; i <= 20; i++ ) {
+            Assert.assertFalse(AlignmentUtils.isInsideDeletion(cigar, i));
+        }
+        for ( int i=21; i <= 26; i++ ){
+            Assert.assertTrue(AlignmentUtils.isInsideDeletion(cigar, i));
+        }
+        for ( int i=27; i <= 28; i++ ) {
+            Assert.assertFalse(AlignmentUtils.isInsideDeletion(cigar, i));
+        }
+    }
+
     ////////////////////////////////////////////////////
     // Test AlignmentUtils.readToAlignmentByteArray() //
     ////////////////////////////////////////////////////
@@ -605,6 +896,259 @@ public final class AlignmentUtilsUnitTest {
         Assert.assertTrue(expectedCigar.equals(actualCigar), "Wrong left alignment detected for cigar " + originalCigar.toString() + " to " + actualCigar.toString() + " but expected " + expectedCigar.toString() + " with repeat length " + repeatLength);
     }
 
+    //additionally test that will not align past leftmostAllowedAlignment.  Dataset is same as provided by LeftAlignIndelDataProvider
+    // with additional parameter of leftmostAllowedAlignment, and adjusted expected results
+    @DataProvider(name = "LeftAlignIndelWithLimitDataProvider")
+    public Object[][] makeLeftAlignIndelWithLimitDataProvider() {
+        List<Object[]> tests = new ArrayList<>();
+
+        final byte[] repeat1Reference = "ABCDEFGHIJKLMNOPXXXXXXXXXXABCDEFGHIJKLMNOP".getBytes();
+        final byte[] repeat2Reference = "ABCDEFGHIJKLMNOPXYXYXYXYXYABCDEFGHIJKLMNOP".getBytes();
+        final byte[] repeat3Reference = "ABCDEFGHIJKLMNOPXYZXYZXYZXYZABCDEFGHIJKLMN".getBytes();
+        final int referenceLength = repeat1Reference.length;
+
+        for (int indelStart = 0; indelStart < repeat1Reference.length; indelStart++) {
+            for (final int indelSize : Arrays.asList(0, 1, 2, 3, 4)) {
+                for (final char indelOp : Arrays.asList('D', 'I')) {
+                    for (int leftmostAllowedAlignment = 0; leftmostAllowedAlignment < indelStart; leftmostAllowedAlignment++) {
+                        if (indelOp == 'D' && indelStart + indelSize >= repeat1Reference.length)
+                            continue;
+
+                        final int readLength = referenceLength - (indelOp == 'D' ? indelSize : -indelSize);
+
+                        // create the original CIGAR string
+                        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, readLength);
+                        read.setCigar(buildTestCigarString(indelSize == 0 ? 'M' : indelOp, 0, indelStart, indelSize, readLength));
+                        final Cigar originalCigar = read.getCigar();
+
+                        final Cigar expectedCigar1 = makeExpectedCigar1WithLimit(originalCigar, indelOp, indelStart, indelSize, readLength, leftmostAllowedAlignment);
+                        final byte[] readString1 = makeReadString(repeat1Reference, indelOp, indelStart, indelSize, readLength, 1);
+                        tests.add(new Object[]{originalCigar, expectedCigar1, repeat1Reference, readString1, 1, leftmostAllowedAlignment});
+
+                        final Cigar expectedCigar2 = makeExpectedCigar2WithLimit(originalCigar, indelOp, indelStart, indelSize, readLength, leftmostAllowedAlignment);
+                        final byte[] readString2 = makeReadString(repeat2Reference, indelOp, indelStart, indelSize, readLength, 2);
+                        tests.add(new Object[]{originalCigar, expectedCigar2, repeat2Reference, readString2, 2, leftmostAllowedAlignment});
+
+                        final Cigar expectedCigar3 = makeExpectedCigar3WithLimit(originalCigar, indelOp, indelStart, indelSize, readLength, leftmostAllowedAlignment);
+                        final byte[] readString3 = makeReadString(repeat3Reference, indelOp, indelStart, indelSize, readLength, 3);
+                        tests.add(new Object[]{originalCigar, expectedCigar3, repeat3Reference, readString3, 3, leftmostAllowedAlignment});
+                    }
+                }
+            }
+        }
+        return tests.toArray(new Object[][]{});
+    }
+
+    private Cigar makeExpectedCigar1WithLimit(final Cigar originalCigar, final char indelOp, final int indelStart, final int indelSize, final int readLength, final int leftmostAllowedAlignment) {
+        if (indelSize == 0 || indelStart < 17 || indelStart > (26 - (indelOp == 'D' ? indelSize : 0)) || indelStart <= leftmostAllowedAlignment)
+            return originalCigar;
+
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, readLength);
+        read.setCigar(buildTestCigarString(indelOp, 0, Math.max(16, leftmostAllowedAlignment), indelSize, readLength));
+        return read.getCigar();
+    }
+
+    private Cigar makeExpectedCigar2WithLimit(final Cigar originalCigar, final char indelOp, final int indelStart, final int indelSize, final int readLength, final int leftmostAllowedAlignment) {
+        if (indelStart < 17 || indelStart > (26 - (indelOp == 'D' ? indelSize : 0)) || indelStart <= leftmostAllowedAlignment)
+            return originalCigar;
+
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, readLength);
+
+        if (indelOp == 'I' && (indelSize == 1 || indelSize == 3) && indelStart % 2 == 1)
+            read.setCigar(buildTestCigarString(indelOp, 0, Math.max(Math.max(indelStart - indelSize, 16), leftmostAllowedAlignment), indelSize, readLength));
+        else if ((indelSize == 2 || indelSize == 4) && (indelOp == 'D' || indelStart % 2 == 0))
+            read.setCigar(buildTestCigarString(indelOp, 0, Math.max(16, leftmostAllowedAlignment), indelSize, readLength));
+        else
+            return originalCigar;
+
+        return read.getCigar();
+    }
+
+    private Cigar makeExpectedCigar3WithLimit(final Cigar originalCigar, final char indelOp, final int indelStart, final int indelSize, final int readLength, final int leftmostAllowedAlignment) {
+        if (indelStart < 17 || indelStart > (28 - (indelOp == 'D' ? indelSize : 0)) || indelStart <= leftmostAllowedAlignment)
+            return originalCigar;
+
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, readLength);
+
+        if (indelSize == 3 && (indelOp == 'D' || indelStart % 3 == 1))
+            read.setCigar(buildTestCigarString(indelOp, 0, Math.max(16, leftmostAllowedAlignment), indelSize, readLength));
+        else if ((indelOp == 'I' && indelSize == 4 && indelStart % 3 == 2) ||
+                (indelOp == 'I' && indelSize == 2 && indelStart % 3 == 0) ||
+                (indelOp == 'I' && indelSize == 1 && indelStart < 28 && indelStart % 3 == 2))
+            read.setCigar(buildTestCigarString(indelOp, 0, Math.max(Math.max(indelStart - indelSize, 16), leftmostAllowedAlignment), indelSize, readLength));
+        else
+            return originalCigar;
+
+        return read.getCigar();
+    }
+
+    @Test(dataProvider = "LeftAlignIndelWithLimitDataProvider")
+    public void testLeftAlignIndelWithLimit(final Cigar originalCigar, final Cigar expectedCigar, final byte[] reference, final byte[] read, final int repeatLength, final int leftmostAllowedAlignment) {
+        final Cigar actualCigar = AlignmentUtils.leftAlignIndel(originalCigar, reference, read, 0, 0, leftmostAllowedAlignment, true);
+        Assert.assertTrue(expectedCigar.equals(actualCigar), "Wrong left alignment detected for cigar " + originalCigar.toString() + " to " + actualCigar.toString() + " but expected " + expectedCigar.toString() + " with repeat length " + repeatLength + " and leftmostAllowedAlignment " + leftmostAllowedAlignment);
+    }
+
+    @DataProvider(name = "LeftAlignIndelStartOfRead")
+    public Object[][] makeLeftAlignIndelStartOfReadDataProvider() {
+        List<Object[]> tests = new ArrayList<>();
+
+        final byte[] repeat1Reference = "XXXXXXXXXXXXABCDEFGHIJKLMNOP".getBytes();
+        final byte[] repeat2Reference = "XYXYXYXYXYXYABCDEFGHIJKLMNOP".getBytes();
+        final byte[] repeat3Reference = "XYZXYZXYZXYZABCDEFGHIJKLMNOP".getBytes();
+        final int referenceLength = repeat1Reference.length;
+        final int repeatLength=12;
+
+        for (int indelStart = 1; indelStart < repeat1Reference.length; indelStart++) {
+            for (final int indelSize : Arrays.asList(0, 1, 2, 3, 4)) {
+                for (final char indelOp : Arrays.asList('D', 'I')) {
+                    if (indelOp == 'D' && indelStart + indelSize >= repeatLength)
+                        continue;
+                    final int readLength = referenceLength - (indelOp == 'D' ? indelSize : -indelSize);
+
+                    // create the original CIGAR string
+                    final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, readLength);
+                    read.setCigar(buildTestCigarString(indelSize == 0 ? 'M' : indelOp, 0, indelStart, indelSize, readLength));
+                    final Cigar originalCigar = read.getCigar();
+
+                    Cigar expectedCigar = originalCigar;
+
+                    //create expected CIGAR string if the indel will be realigned
+                    if (indelStart < 13 && indelSize > 0) {
+                        if (indelOp == 'D') {
+                            final List<CigarElement> elements = Stream.of(new CigarElement(readLength, CigarOperator.M)).collect(Collectors.toList());
+
+                            expectedCigar = new Cigar(elements);
+                        } else {
+                            final List<CigarElement> elements = Stream.of(new CigarElement(indelSize, CigarOperator.I), new CigarElement(referenceLength, CigarOperator.M)).collect(Collectors.toList());
+                            expectedCigar = new Cigar(elements);
+                        }
+                    }
+
+                    //create readString
+                    final byte[] readString1 = makeReadStringStartOfRead(repeat1Reference, indelOp, indelStart, indelSize, readLength, 1);
+                    tests.add(new Object[]{originalCigar, expectedCigar, repeat1Reference, readString1});
+                    if( indelSize % 2 == 0) {
+                        final byte[] readString2 = makeReadStringStartOfRead(repeat2Reference, indelOp, indelStart, indelSize, readLength, 2);
+                        tests.add(new Object[]{originalCigar, expectedCigar, repeat2Reference, readString2});
+                    }
+                    if (indelSize % 3 ==0) {
+                        final byte[] readString3 = makeReadStringStartOfRead(repeat3Reference, indelOp, indelStart, indelSize, readLength, 3);
+                        tests.add(new Object[]{originalCigar, expectedCigar, repeat3Reference, readString3});
+                    }
+                }
+            }
+        }
+        return tests.toArray(new Object[][]{});
+    }
+
+    private static byte[] makeReadStringStartOfRead(final byte[] reference, final char indelOp, final int indelStart, final int indelSize, final int readLength, final int repeatLength) {
+        final byte[] readString = new byte[readLength];
+
+        if ( indelOp == 'D' && indelSize > 0 ) {
+            System.arraycopy(reference, 0, readString, 0, indelStart);
+            System.arraycopy(reference, indelStart + indelSize, readString, indelStart, readLength - indelStart);
+        } else if ( indelOp == 'I' && indelSize > 0 ) {
+            System.arraycopy(reference, 0, readString, 0, indelStart);
+            for ( int i = indelStart; i < indelSize+indelStart; i++ ) {
+                if ( i % repeatLength == 0 )
+                    readString[i] = 'X';
+                else if ( i % repeatLength == 1 )
+                    readString[i] = 'Y';
+                else
+                    readString[i] = 'Z';
+            }
+            System.arraycopy(reference, indelStart, readString, indelStart + indelSize, readLength - indelStart - indelSize);
+        } else {
+            System.arraycopy(reference, 0, readString, 0, readLength);
+        }
+
+        return readString;
+    }
+
+
+    @Test(dataProvider = "LeftAlignIndelStartOfRead")
+    public void testLeftAlignToStartOfRead(final Cigar originalCigar, final Cigar expectedCigar, final byte[] reference, final byte[] read) {
+        final Cigar actualCigar = AlignmentUtils.leftAlignIndel(originalCigar, reference, read, 0, 0, true);
+        Assert.assertTrue(expectedCigar.equals(actualCigar));
+    }
+
+
+    //////////////////////////////////////////
+    // Test AlignmentUtils.IsIndelAlignedTooFarLeft //
+    //////////////////////////////////////////
+
+    @DataProvider(name = "IsIndelAlignedTooFarLeftDataProvider")
+    public Object[][] makeIsIndelALignedTooFarLeftDataProvider() {
+        List<Object[]> tests = new ArrayList<>();
+        for (int nM = 0; nM < 3; nM++) {
+            for (int nN = 0; nN < 3; nN++) {
+                for (int nEq = 0; nEq < 3; nEq++) {
+                    for (int nX = 0; nX < 3; nX++) {
+                        final int totalBefore = nM + nN + nEq + nX;
+                        if (totalBefore == 0) {
+                            continue;
+                        }
+                        for (int leftmostLimit = totalBefore - 2; leftmostLimit < totalBefore + 2; leftmostLimit++) {
+                            if (leftmostLimit < 0) {
+                                continue;
+                            }
+                            boolean expected = leftmostLimit > totalBefore;
+                            ArrayList<CigarElement> elements = new ArrayList<>();
+                            if (nM > 0) {
+                                elements.add(new CigarElement(nM, CigarOperator.M));
+                            }
+                            if (nN > 0) {
+                                elements.add(new CigarElement(nN, CigarOperator.N));
+                            }
+                            if (nEq > 0) {
+                                elements.add(new CigarElement(nEq, CigarOperator.EQ));
+                            }
+                            if (nX > 0) {
+                                elements.add(new CigarElement(nX, CigarOperator.X));
+                            }
+                            tests.add(new Object[]{new Cigar(elements), leftmostLimit, false});
+                            ArrayList<CigarElement> elementsInsertion = elements;
+                            elementsInsertion.add(new CigarElement(10, CigarOperator.I));
+                            tests.add(new Object[]{new Cigar(elementsInsertion), leftmostLimit, expected});
+                            ArrayList<CigarElement> elementsDeletion = elements;
+                            elementsDeletion.add(new CigarElement(10, CigarOperator.I));
+                            tests.add(new Object[]{new Cigar(elementsDeletion), leftmostLimit, expected});
+
+                            //test clippings
+                            ArrayList<CigarElement> elementsSoftClippedInsertion = elementsInsertion;
+                            elementsSoftClippedInsertion.add(0, new CigarElement(2, CigarOperator.S));
+                            tests.add(new Object[]{new Cigar(elementsSoftClippedInsertion), leftmostLimit, expected});
+                            ArrayList<CigarElement> elementsHardClippedInsertion = elementsInsertion;
+                            elementsHardClippedInsertion.add(0, new CigarElement(2, CigarOperator.H));
+                            tests.add(new Object[]{new Cigar(elementsHardClippedInsertion), leftmostLimit, expected});
+                            ArrayList<CigarElement> elementsPaddedInsertion = elementsInsertion;
+                            elementsPaddedInsertion.add(0, new CigarElement(2, CigarOperator.P));
+                            tests.add(new Object[]{new Cigar(elementsPaddedInsertion), leftmostLimit, expected});
+
+                            ArrayList<CigarElement> elementsSoftClippedDeletion = elementsDeletion;
+                            elementsSoftClippedDeletion.add(0, new CigarElement(2, CigarOperator.S));
+                            tests.add(new Object[]{new Cigar(elementsSoftClippedDeletion), leftmostLimit, expected});
+                            ArrayList<CigarElement> elementsHardClippedDeletion = elementsDeletion;
+                            elementsHardClippedDeletion.add(0, new CigarElement(2, CigarOperator.H));
+                            tests.add(new Object[]{new Cigar(elementsHardClippedDeletion), leftmostLimit, expected});
+                            ArrayList<CigarElement> elementsPaddedDeletion = elementsDeletion;
+                            elementsPaddedDeletion.add(0, new CigarElement(2, CigarOperator.P));
+                            tests.add(new Object[]{new Cigar(elementsPaddedDeletion), leftmostLimit, expected});
+
+                        }
+                    }
+
+                }
+            }
+        }
+        return tests.toArray(new Object[][]{});
+    }
+
+    @Test(dataProvider = "IsIndelAlignedTooFarLeftDataProvider")
+    public void testIsIndelAlignedTooFarLeft(final Cigar cigar, final int leftmostAllowedAlignment, final boolean expected) {
+        Assert.assertEquals(AlignmentUtils.isIndelAlignedTooFarLeft(cigar, leftmostAllowedAlignment), expected);
+    }
+
     //////////////////////////////////////////
     // Test AlignmentUtils.trimCigarByReference() //
     //////////////////////////////////////////
@@ -748,6 +1292,18 @@ public final class AlignmentUtilsUnitTest {
 //        * read  : AC-GxTA  - 3M1I2M
 //        * result: AC-GxTA => 2M1D1M1I2M
         tests.add(new Object[]{"3M1I2M", "2M1D3M", "2M1D1M1I2M"});
+
+//        * ref   : ACGTA
+//        * hap   : A-GTA  - 1M1D3M
+//        * read  : A--TA  - 1M1D2M
+//        * result: A--TA => 1M2D2M
+        tests.add(new Object[]{"1M1D2M", "1M1D3M", "1M2D2M"});
+
+//        * ref   : ACG-TA
+//        * hap   : A-GxTA  - 1M1D1M1I2M
+//        * read  : A---TA  - 1M2D2M
+//        * result: A---TA => 1M2D2M
+        tests.add(new Object[]{"1M2D2M", "1M1D1M1I2M", "1M2D2M"});
 
 //        * ref   : A-CGTA
 //        * hap   : A-CGTA  - 5M

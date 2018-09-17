@@ -1,84 +1,202 @@
+language: java
 sudo: required
 dist: trusty
+group: travis_lts
+git:
+  depth: 9999999
+  lfs_skip_smudge: true
 jdk:
-- oraclejdk8
+- openjdk8
 env:
   matrix:
-  - CLOUD=mandatory
-  - CLOUD=false
+  - TEST_TYPE=cloud UPLOAD=true
+  - TEST_TYPE=integration TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - TEST_TYPE=unit TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - TEST_TYPE=variantcalling TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - TEST_TYPE=python TEST_DOCKER=true TEST_VERBOSITY=minimal
+  - RUN_CNV_GERMLINE_WDL=true
+  - RUN_CNV_SOMATIC_WDL=true
+  - RUN_M2_WDL=true
+  - RUN_CNN_WDL=true
   global:
   #gradle needs this
   - TERM=dumb
-  #limit gradle jvm memory
-  - GRADLE_OPTS=-Xmx1024m
+  #limit gradle jvm memory and disable daemon
+  - GRADLE_OPTS="-Xmx2048m -Dorg.gradle.daemon=false"
   #google cloud stuff
   - CLOUDSDK_CORE_DISABLE_PROMPTS=1
-  - GCLOUD=$HOME/gcloud/google-cloud-sdk/bin 
-  - CLOUDSDK_PYTHON_SITEPACKAGES=1 
+  - GCLOUD_HOME=$HOME/gcloud/google-cloud-sdk/bin
+  - CLOUDSDK_PYTHON_SITEPACKAGES=1
   - GOOGLE_APPLICATION_CREDENTIALS=$TRAVIS_BUILD_DIR/servicekey.json
   #hellbender specific variables
   - HELLBENDER_TEST_INPUTS=gs://hellbender/test/resources/
-  - HELLBENDER_TEST_STAGING=gs://hellbender/test/staging/
+  - HELLBENDER_TEST_STAGING=gs://hellbender-test-logs/staging/
+  - HELLBENDER_TEST_LOGS=/hellbender-test-logs/build_reports/
   - HELLBENDER_TEST_PROJECT=broad-dsde-dev
-  #coveralls repo token
-  - secure: RA4LKD82cW+0xPayPVAWSpYqJu5uoPcz7oXXYtYNVuilFmS8PGYx0g/BXs4QMvQsGMt6aMLN8m7lMAPN5XTH/8JSeM3VmQ3mdpgNdP+p3CVlwrapZ2lTq27Wb/E8J1CGEHOg76z716t//FUElyC/gdhS+tfBmXk3YanM5fMXEHs=
-  #google API key
-  - secure: "eHyDxfcfv6pSIkoqQ9PimiYu9I6vmXJOpY/OkXLkc7ZAUfNTfRVytUGG9Xf/bKKF+Wscm5pIfZJ/TMDG6E3Uyngs9nVK/29QWevcEaLDJy8OdI9OgPZb13hlbM2jbVv5AVBGYcbcNBrTvrTs0MOMOFPEJqZ99xWIj5bzZ/AsIfU="
+  - HELLBENDER_JSON_SERVICE_ACCOUNT_KEY=servicekey.json
+  #for uploading artifacts
+  - ARTIFACTORY_USERNAME=gatkci
+  #artifactory password
+  - secure: "E0LWXgX3aWSE/DWHXXDx4vrAq4uX6vKg402wToaZ5otbHQ/UP0H7/FA5jomavAXoC46oMVHZcEltZ5OVhuJ0NW8yYxUCecJ1D/YvVQmnfFABcV/qLM+k4e2rYQOKVw/pejB2gG8XdTA+XE2WyTeENbmIkputS8f1ndKWCmZxuuk="
+  # For cromwell jar download
+  - CROMWELL_JAR=$HOME/cromwell-30.2.jar
 matrix:
   fast_finish: true
-  allow_failures:
-    - env: CLOUD=todo
+  include:
+     - jdk: oraclejdk8
+       env: TEST_TYPE=integration TEST_VERBOSITY=minimal
 before_cache:
-  - rm -f $HOME/.gradle/caches/modules-2/modules-2.lock
+  - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
+  - rm -fr $HOME/.gradle/caches/*/plugin-resolution/
 cache:
   directories:
     - $HOME/.gradle/caches/
     - $HOME/.gradle/wrapper/
+    - $HOME/.m2
     - $HOME/gcloud/
+    - $HOME/site-library
 before_install:
-#setup google stuff
+  #skip push builds if there's an associated PR because we don't look at them anway
+- if [[ ${TRAVIS_EVENT_TYPE} == push ]];
+  then
+    PULL_REQUESTS=$( scripts/check_for_pull_request );
+    if [[ $( grep -c "commits" <<< ${PULL_REQUESTS} ) -gt 0 ]];
+    then
+      travis_terminate 0;
+    fi
+  fi
+- REPORT_PATH=${TRAVIS_BRANCH}_${TRAVIS_JOB_NUMBER};
+- if [[ $TRAVIS_SECURE_ENV_VARS == true && $TRAVIS_EVENT_TYPE != cron ]]; then
+    echo "Test report will be written to  https://storage.googleapis.com$HELLBENDER_TEST_LOGS$REPORT_PATH/tests/test/index.html";
+  fi
+#setup google cloud and github authentication
 - if [ $TRAVIS_SECURE_ENV_VARS == true ]; then
+    export BOTO_CONFIG=/dev/null;
     openssl aes-256-cbc -K $encrypted_29f3b7c4d8c3_key -iv $encrypted_29f3b7c4d8c3_iv  -in resources_for_CI/servicekey.json.enc -out servicekey.json -d;
     scripts/install_gcloud.sh;
-    printf 'y\n' | $GCLOUD/gcloud components update app;
-    $GCLOUD/gcloud config set project broad-dsde-dev;
-    $GCLOUD/gcloud auth activate-service-account --key servicekey.json;
+    printf 'y\n' | $GCLOUD_HOME/gcloud components update;
+    if [[ $TEST_TYPE == cloud ]]; then
+      printf 'y\n' | $GCLOUD_HOME/gcloud components install beta;
+    fi;
+    $GCLOUD_HOME/gcloud config set project broad-dsde-dev;
+    $GCLOUD_HOME/gcloud auth activate-service-account --key-file servicekey.json;
+    $GCLOUD_HOME/gcloud --version
+    openssl aes-256-cbc -K $encrypted_4823d58debd3_key -iv $encrypted_4823d58debd3_iv -in resources_for_CI/github_deploy_key.enc -out ~/.ssh/id_rsa -d;
+    chmod 600 ~/.ssh/id_rsa;
+    echo "Testing github authentication:";
+    ssh -T git@github.com;
+    echo "Done testing github authentication";
   fi
 #install R
-- sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E084DAB9
-- sudo add-apt-repository "deb http://cran.rstudio.com/bin/linux/ubuntu trusty/"
-- sudo apt-get update
-- sudo apt-get install -y --force-yes r-base
-- R --version
-#install gcc
-- sudo apt-get install -y --force-yes  gcc
-- gcc --version
-#install git-lfs
+- if [[ $TEST_DOCKER != true ]]; then
+   sudo mkdir -p /usr/local/lib/R/;
+   sudo mkdir -p site-library;
+   sudo ln -sFv ~/site-library /usr/local/lib/R/site-library;
+   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E084DAB9;
+   sudo add-apt-repository "deb http://cran.rstudio.com/bin/linux/ubuntu trusty/";
+   sudo apt-get update;
+   sudo apt-get install -y --force-yes r-base-dev=3.1.3-1trusty;
+   sudo apt-get install -y --force-yes r-base-core=3.1.3-1trusty;
+   sudo Rscript scripts/docker/gatkbase/install_R_packages.R;
+  fi
+# Download Cromwell jar -- if you change the version, please change the CROMWELL_JAR env variable above, too.
+- if [[ $RUN_CNV_GERMLINE_WDL == true || $RUN_CNV_SOMATIC_WDL == true || $RUN_M2_WDL == true || $RUN_CNN_WDL == true ]]; then
+    wget -O $CROMWELL_JAR https://github.com/broadinstitute/cromwell/releases/download/30.2/cromwell-30.2.jar;
+  fi
+# Download git lfs files
+- git lfs version
+- git lfs install
+- git lfs fetch
+- git lfs checkout
 install:
-- if [[ $TRAVIS_SECURE_ENV_VARS == false && $CLOUD == mandatory ]]; then
+- if [[ $TRAVIS_SECURE_ENV_VARS == false && $TEST_TYPE == cloud ]]; then
     echo "Can't run cloud tests without keys so don't bother building";
+  elif [[ $TEST_DOCKER == true ]]; then
+    echo "Skip the install because we're doing a docker build";
   else
     ./gradlew assemble;
+    ./gradlew installDist;
+    if [[ $RUN_CNV_GERMLINE_WDL == true || $RUN_CNV_SOMATIC_WDL == true || $RUN_M2_WDL == true || $RUN_CNN_WDL == true ]]; then
+      echo "building a shadow jar for the wdl";
+      ./gradlew shadowJar;
+    elif [[ $TEST_TYPE == cloud ]]; then
+      echo "building a spark jar for the dataproc tests";
+      ./gradlew sparkjar;
+    fi;
   fi
 script:
-- if [[ $TRAVIS_SECURE_ENV_VARS == false && $CLOUD == mandatory ]]; then
+# run a basic sanity check to be sure that gatk doesn't explode
+# run tests
+- if [[ $TRAVIS_EVENT_TYPE == cron ]]; then
+    echo "Not running any tests for nightly builds";
+  elif [[ $TRAVIS_SECURE_ENV_VARS == false && $TEST_TYPE == cloud ]]; then
     echo "Can't run cloud tests without keys so don't run tests";
+  elif [[ $RUN_CNV_GERMLINE_WDL == true ]]; then
+    echo "Running CNV germline workflows";
+    bash scripts/cnv_cromwell_tests/germline/run_cnv_germline_workflows.sh;
+  elif [[ $RUN_CNV_SOMATIC_WDL == true ]]; then
+    echo "Running CNV somatic workflows";
+    bash scripts/cnv_cromwell_tests/somatic/run_cnv_somatic_workflows.sh;
+  elif [[ $RUN_M2_WDL == true ]]; then
+    echo "Deleting some unused files before running M2 WDL...";
+    rm -Rf src/test/resources/large/VQSR;
+    echo "Running M2 WDL";
+    sudo bash scripts/m2_cromwell_tests/run_m2_wdl.sh;
+  elif [[ $RUN_CNN_WDL == true ]]; then
+    echo "Running CNN WDL";
+    sudo bash scripts/cnn_variant_cromwell_tests/run_cnn_variant_wdl.sh;
+  elif [[ $TEST_DOCKER == true ]]; then
+    echo "Building docker image and running appropriate tests..." ;
+    if [ ${TRAVIS_PULL_REQUEST} != false ]; then
+      sudo bash build_docker.sh  -e FETCH_HEAD -s -u -t ${TRAVIS_PULL_REQUEST};
+      DOCKER_TAG=FETCH_HEAD;
+    else
+      echo ${TRAVIS_COMMIT};
+      sudo bash build_docker.sh  -e ${TRAVIS_COMMIT} -s -u;
+      DOCKER_TAG=$TRAVIS_COMMIT;
+    fi;
+    sudo docker images;
+    echo ${TEST_TYPE};
+    sudo mkdir -p build/reports/;
+    sudo chmod -R a+w build/reports/;
+    cp scripts/docker/dockertest.gradle .;
+    sudo docker run -v $(pwd):/gatkCloneMountPoint:cached -v $(pwd)/testJars:/jars:cached --rm -e "TEST_VERBOSITY=minimal" -e "TEST_TYPE=${TEST_TYPE}" -t broadinstitute/gatk:${DOCKER_TAG} bash --init-file /gatk/gatkenv.rc /root/run_unit_tests.sh;
+    TEST_EXIT_VALUE=$?;
+    sudo mkdir build/reports/tests/test && sudo cp -rp build/reports/tests/testOnPackagedReleaseJar/* build/reports/tests/test && sudo rm -r build/reports/tests/testOnPackagedReleaseJar;
+    $( exit ${TEST_EXIT_VALUE} );
   else
-    bash scripts/install_git_lfs.sh;
-    travis_wait 30 ./gradlew test;
+    ./gatk PrintReads -I src/test/resources/NA12878.chr17_69k_70k.dictFix.bam -O output.bam;
+    travis_wait 50 ./gradlew jacocoTestReport;
   fi
+
 after_success:
-- if [[ $TRAVIS_SECURE_ENV_VARS == false && $CLOUD == mandatory ]]; then
-    echo "Can't run cloud tests without keys so don't try to record coverage tests";
-  else
-   ./gradlew jacocoTestReport coveralls;
+- bash <(curl -s https://codecov.io/bash)
+- if [[ $TRAVIS_BRANCH == master && $UPLOAD == true ]]; then ./gradlew uploadArchives; fi
+# if this is actually a commit to master and not a pull request build into master, then publish master-snapshot
+- if [[ $TRAVIS_BRANCH == master && $TRAVIS_PULL_REQUEST == false && $UPLOAD == true ]]; then
+    git tag master;
+    ./gradlew uploadArchives; 
+  fi
+
+# This creates and uploads the gatk zip file to the nightly build bucket, only keeping the 10 newest entries
+# This also pokes the Dockerhub web api which is securely stored in the travis API with the variable "DOCKERHUB_URL"
+- if [[ $TRAVIS_BRANCH == master && $TRAVIS_EVENT_TYPE == cron && $UPLOAD == true ]]; then
+    $GCLOUD_HOME/gcloud components -q update gsutil;
+    gsutil ls -l gs://gatk-nightly-builds | grep gatk | sort -r -k 2 | grep -o '\S\+$' | tail -n +11 | xargs -I {} gsutil rm {};
+    ./gradlew bundle;
+    ZIP_FILE="$(ls build/ | grep .zip)";
+    echo "Uploading zip to gs://gatk-nightly-builds/";
+    $GCLOUD_HOME/gsutil -m cp build/$ZIP_FILE gs://gatk-nightly-builds/"$(date +%Y-%m-%d)"-$ZIP_FILE;
+    echo "Triggering an automatic build on dockerhub";
+    curl -H "Content-Type:application/json" --data '{"build":true}' -X POST ${DOCKERHUB_URL};
   fi
 after_failure:
 - dmesg | tail -100
 after_script:
-- if [ $TRAVIS_SECURE_ENV_VARS == true ]; then
-    $GCLOUD/gcloud components -q update gsutil;
-    REPORT_PATH=$TRAVIS_BRANCH_$TRAVIS_JOB_NUMBER;
-    $GCLOUD/gsutil -m cp -z html -z js -z xml -z css -r build/reports/tests gs://hellbender/test/build_reports/$REPORT_PATH/;
-    echo "See the test report at https://storage.googleapis.com/hellbender/test/build_reports/$REPORT_PATH/tests/index.html";
+- if [[ $TRAVIS_SECURE_ENV_VARS == true && $TRAVIS_EVENT_TYPE != cron ]]; then
+    $GCLOUD_HOME/gcloud components -q update gsutil;
+    $GCLOUD_HOME/gsutil -m cp -z html -z js -z xml -z css -r build/reports/tests gs:/$HELLBENDER_TEST_LOGS$REPORT_PATH/;
+    echo "See the test report at https://storage.googleapis.com$HELLBENDER_TEST_LOGS$REPORT_PATH/tests/test/index.html";
   fi
+
+

@@ -1,5 +1,7 @@
 package org.broadinstitute.hellbender.engine;
 
+import com.google.common.collect.Sets;
+import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.FeatureCodec;
 import htsjdk.tribble.bed.BEDCodec;
@@ -8,28 +10,25 @@ import htsjdk.variant.bcf2.BCF2Codec;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCF3Codec;
 import htsjdk.variant.vcf.VCFCodec;
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.hellbender.cmdline.TestProgramGroup;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.cmdline.programgroups.QCProgramGroup;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.codecs.table.TableCodec;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Spliterators;
+import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 
-public final class FeatureManagerUnitTest extends BaseTest {
+public final class FeatureManagerUnitTest extends GATKBaseTest {
     private static final String FEATURE_MANAGER_TEST_DIRECTORY = publicTestDir + "org/broadinstitute/hellbender/engine/";
 
     @DataProvider(name = "DetectCorrectFileFormatTestData")
@@ -90,10 +89,10 @@ public final class FeatureManagerUnitTest extends BaseTest {
 
     @Test(dataProvider = "IsFeatureFileTestData")
     public void testIsFeatureFile( final File file, final boolean expectedIsFeatureFile ) {
-        Assert.assertEquals(FeatureManager.isFeatureFile(file), expectedIsFeatureFile, "isFeatureFile() returned incorrect result for file " + file.getAbsolutePath());
+        Assert.assertEquals(FeatureManager.isFeatureFile(file.toPath()), expectedIsFeatureFile, "isFeatureFile() returned incorrect result for file " + file.getAbsolutePath());
     }
 
-    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup = QCProgramGroup.class)
+    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup = TestProgramGroup.class)
     private static class ValidFeatureArgumentSource extends CommandLineProgram {
         // We should be able to detect the type parameter of a FeatureInput regardless of whether or
         // not it's wrapped within a Collection
@@ -122,7 +121,7 @@ public final class FeatureManagerUnitTest extends BaseTest {
         }
     }
 
-    @CommandLineProgramProperties(summary = "", oneLineSummary = "",programGroup = QCProgramGroup.class)
+    @CommandLineProgramProperties(summary = "", oneLineSummary = "",programGroup = TestProgramGroup.class)
     @SuppressWarnings("rawtypes")
     private static class InvalidFeatureArgumentSource extends CommandLineProgram {
         // FeatureInputs without type parameters (ie., raw types) should be detected as errors
@@ -187,6 +186,63 @@ public final class FeatureManagerUnitTest extends BaseTest {
         Assert.assertEquals(bedFeatures.size(), 1, "Wrong number of Features returned from BED test Feature file");
     }
 
+
+    @Test
+    public void testGetAllSequenceDictionaries() {
+        ValidFeatureArgumentSource toolInstance = new ValidFeatureArgumentSource();
+
+        // Initialize two of the FeatureInput fields as they would be initialized by the argument-parsing
+        // system to simulate a run of the tool with two FeatureInputs.
+        toolInstance.variantContextFeatureInput = new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "feature_data_source_test.vcf");
+        toolInstance.bedListFeatureInput.add(new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "minimal_bed_file.bed"));
+
+        FeatureManager manager = new FeatureManager(toolInstance);
+        final List<SAMSequenceDictionary> dictionaries = manager.getAllSequenceDictionaries();
+        Assert.assertEquals(dictionaries.size(), 2);
+        Assert.assertEquals(dictionaries.stream().map(dict -> dict.size()).collect(Collectors.toSet()), Sets.newHashSet(1, 4));
+    }
+
+    @Test
+    public void testSequenceDictionary() {
+        final ValidFeatureArgumentSource toolInstance = new ValidFeatureArgumentSource();
+
+        // Initialize the FeatureInput field as it would be initialized by the argument-parsing
+        // system.
+        toolInstance.variantContextFeatureInput = new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "feature_data_source_test_withSequenceDict.vcf");
+
+        final FeatureManager manager = new FeatureManager(toolInstance);
+        final List<SAMSequenceDictionary> dicts = manager.getVariantSequenceDictionaries();
+        Assert.assertEquals(dicts.size(), 1);
+        Assert.assertEquals(dicts.get(0).getSequences().size(), 84);
+    }
+
+    @Test
+    public void testTwoSequenceDictionaries() {
+        final ValidFeatureArgumentSource toolInstance = new ValidFeatureArgumentSource();
+
+        // Initialize two of the FeatureInput fields as they would be initialized by the argument-parsing
+        // system to simulate a run of the tool with two FeatureInputs.
+        toolInstance.variantContextFeatureInput = new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "feature_data_source_test_withSequenceDict.vcf");
+        toolInstance.variantContextListFeatureInput.add(new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "feature_data_source_test_with_bigHeader.vcf"));
+
+        final FeatureManager manager = new FeatureManager(toolInstance);
+        final List<SAMSequenceDictionary> dicts = manager.getVariantSequenceDictionaries();
+        Assert.assertEquals(dicts.size(), 2);
+    }
+
+    @Test
+    public void testEmptySequenceDictionary() {
+        final ValidFeatureArgumentSource toolInstance = new ValidFeatureArgumentSource();
+
+        // Initialize the FeatureInput field as it would be initialized by the argument-parsing
+        // system.
+        toolInstance.variantContextFeatureInput = new FeatureInput<>(FEATURE_MANAGER_TEST_DIRECTORY + "feature_data_source_test.vcf");
+
+        final FeatureManager manager = new FeatureManager(toolInstance);
+        final List<SAMSequenceDictionary> dicts = manager.getVariantSequenceDictionaries();
+        Assert.assertTrue(dicts.isEmpty(), Objects.toString(dicts));
+    }
+
     @Test
     public void testHandleRequestForValidFeatureInputIterator() {
         final ValidFeatureArgumentSource toolInstance = new ValidFeatureArgumentSource();
@@ -200,11 +256,8 @@ public final class FeatureManagerUnitTest extends BaseTest {
         final Iterator<VariantContext> vcIterator = manager.getFeatureIterator(toolInstance.variantContextFeatureInput);
         final Iterator<BEDFeature> bedIterator = manager.getFeatureIterator(toolInstance.bedListFeatureInput.get(0));
 
-        final List<VariantContext> variants = StreamSupport.stream(Spliterators.spliteratorUnknownSize(vcIterator,0),false)
-                .collect(Collectors.toList());
-
-        final List<BEDFeature> beds = StreamSupport.stream(Spliterators.spliteratorUnknownSize(bedIterator,0),false)
-                .collect(Collectors.toList());
+        final List<VariantContext> variants = Utils.stream(vcIterator).collect(Collectors.toList());
+        final List<BEDFeature> beds = Utils.stream(bedIterator).collect(Collectors.toList());
 
         Assert.assertEquals(variants.size(), 26);
         Assert.assertEquals(variants.get(4).getStart(),280);
@@ -222,8 +275,7 @@ public final class FeatureManagerUnitTest extends BaseTest {
         final FeatureManager manager = new FeatureManager(toolInstance);
         final Iterator<VariantContext> vcIterator = manager.getFeatureIterator(toolInstance.variantContextFeatureInput);
 
-        final List<VariantContext> variants = StreamSupport.stream(Spliterators.spliteratorUnknownSize(vcIterator,0),false)
-                .collect(Collectors.toList());
+        final List<VariantContext> variants = Utils.stream(vcIterator).collect(Collectors.toList());
 
         Assert.assertEquals(variants.size(), 26);
         Assert.assertEquals(variants.get(4).getStart(),280);

@@ -2,9 +2,11 @@ package org.broadinstitute.hellbender.tools;
 
 
 import htsjdk.samtools.*;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
@@ -13,43 +15,44 @@ import org.broadinstitute.hellbender.utils.read.*;
 import java.io.File;
 
 /**
- * Left-aligns indels from reads in a bam file.
+ * Left-aligns indels in read data
  *
  * <p>
- * LeftAlignIndels is a tool that takes a bam file and left-aligns any indels inside it.  The same indel can often be
- * placed at multiple positions and still represent the same haplotype.  While a standard convention is to place an
- * indel at the left-most position this doesn't always happen, so this tool can be used to left-align them.
+ * This tool left-aligns any indels in the read data contained in a BAM or CRAM file. The same indel can often be
+ * placed at multiple positions and still represent the same haplotype.  While it is a commonly used convention to place
+ * an indel at the left-most position, this doesn't always happen (either because upstream tools broke ties between
+ * equivalent representations randomly or used different aligning conventions), so this tool can be used to left-align
+ * them according to convention. </p>
  *
  * <h3>Input</h3>
  * <p>
- * A bam file to left-align.
+ * A BAM or CRAM file to left-align.
  * </p>
  *
  * <h3>Output</h3>
  * <p>
- * A left-aligned bam.
+ * A left-aligned BAM or CRAM file.
  * </p>
  *
- * <h3>Examples</h3>
+ * <h3>Usage example</h3>
  * <pre>
- * java -Xmx3g -jar GenomeAnalysisTK.jar \
- *   -T LeftAlignIndels \
+ * gatk LeftAlignIndels \
+ *   -R reference.fasta \
  *   -I input.bam \
- *   -o output.vcf
+ *   -O output.bam
  * </pre>
  *
  */
+@DocumentedFeature
 @CommandLineProgramProperties(
-        summary = "LeftAlignIndels is a tool that takes a bam file and left-aligns any indels inside it.  The same indel can often be\n" +
-                "placed at multiple positions and still represent the same haplotype.  While a standard convention is to place an\n" +
-                "indel at the left-most position this doesn't always happen, so this tool can be used to left-align them.",
+        summary = "Left-aligns indels from reads in a SAM/BAM/CRAM file.",
         oneLineSummary = "Left-aligns indels from reads in a SAM/BAM/CRAM file",
-        programGroup = ReadProgramGroup.class
+        programGroup = ReadDataManipulationProgramGroup.class
 )
 public final class LeftAlignIndels extends ReadWalker {
 
     @Argument(doc="Output BAM")
-    private File OUTPUT;
+    private String OUTPUT;
 
     private SAMFileGATKReadWriter outputWriter = null;
 
@@ -60,13 +63,13 @@ public final class LeftAlignIndels extends ReadWalker {
 
     @Override
     public void onTraversalStart() {
-        outputWriter = createSAMWriter(OUTPUT, true);
+        outputWriter = createSAMWriter(IOUtils.getPath(OUTPUT), true);
     }
 
     @Override
     public void apply( GATKRead read, ReferenceContext ref, FeatureContext featureContext ) {
         // we can not deal with screwy records
-        if ( read.isUnmapped() || read.getCigar().numCigarElements() == 0 ) {
+        if ( read.isUnmapped() || read.numCigarElements() == 0 ) {
             outputWriter.addRead(read);
             return;
         }
@@ -84,10 +87,9 @@ public final class LeftAlignIndels extends ReadWalker {
     }
 
     @Override
-    public Object onTraversalSuccess() {
+    public void closeTool() {
         if ( outputWriter != null ) {
             outputWriter.close();
         }
-        return null;
     }
 }

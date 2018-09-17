@@ -24,7 +24,7 @@ import java.util.*;
 public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler<T> {
     private final int minElementsPerStack;
 
-    private final int targetSize;
+    private final long targetSize;
 
     private List<T> groups;
 
@@ -39,7 +39,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
      *                   this value -- if it does, items are removed from Lists evenly until the total size
      *                   is <= this value
      */
-    public LevelingDownsampler(final int targetSize ) {
+    public LevelingDownsampler(final long targetSize ) {
         this(targetSize, 1);
     }
 
@@ -53,9 +53,9 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
      *                            if a stack has only 3 elements and minElementsPerStack is 3, no matter what
      *                            we'll not reduce this stack below 3.
      */
-    public LevelingDownsampler(final int targetSize, final int minElementsPerStack ) {
-        if ( targetSize < 0 ) throw new IllegalArgumentException("targetSize must be >= 0 but got " + targetSize);
-        if ( minElementsPerStack < 0 ) throw new IllegalArgumentException("minElementsPerStack must be >= 0 but got " + minElementsPerStack);
+    public LevelingDownsampler(final long targetSize, final int minElementsPerStack ) {
+        Utils.validateArg( targetSize >= 0, "targetSize must be >= 0 but got " + targetSize);
+        Utils.validateArg( minElementsPerStack >= 0, "minElementsPerStack must be >= 0 but got " + minElementsPerStack);
 
         this.targetSize = targetSize;
         this.minElementsPerStack = minElementsPerStack;
@@ -70,7 +70,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
     }
 
     @Override
-    public void submit( final Collection<T> items ){
+    public void submit( final Collection<T> items ) {
         Utils.nonNull(items, "items");
         Utils.validateArg(!items.contains(null), "null item");
         groups.addAll(items);
@@ -78,7 +78,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
 
     @Override
     public boolean hasFinalizedItems() {
-        return groupsAreFinalized && groups.size() > 0;
+        return groupsAreFinalized && !groups.isEmpty();
     }
 
     @Override
@@ -95,7 +95,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
 
     @Override
     public boolean hasPendingItems() {
-        return ! groupsAreFinalized && groups.size() > 0;
+        return ! groupsAreFinalized && !groups.isEmpty();
     }
 
     @Override
@@ -142,7 +142,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
 
         // We will try to remove exactly this many items, however we will refuse to allow any
         // one group to fall below size 1, and so might end up removing fewer items than this
-        int numItemsToRemove = totalSize - targetSize;
+        long numItemsToRemove = totalSize - targetSize;
 
         currentGroupIndex = 0;
         int numConsecutiveUmodifiableGroups = 0;
@@ -191,7 +191,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
 
                 if ( ! itemsToKeep.get(currentIndex) ) {
                     iter.remove();
-                    numDiscardedItems++;
+                    incrementNumberOfDiscardedItems(1);
                 }
 
                 currentIndex++;
@@ -208,7 +208,7 @@ public final class LevelingDownsampler<T extends List<E>, E> extends Downsampler
                 }
                 currentIndex++;
             }
-            numDiscardedItems += group.size() - keptItems.size();
+            incrementNumberOfDiscardedItems(group.size() - keptItems.size());
             group.clear();
             group.addAll(keptItems);
         }

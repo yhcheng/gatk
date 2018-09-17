@@ -1,22 +1,44 @@
 package org.broadinstitute.hellbender.utils;
 
+import com.google.common.collect.AbstractIterator;
+import com.google.common.collect.Iterators;
+import com.google.common.primitives.Ints;
 import htsjdk.samtools.SAMFileHeader;
-import org.apache.commons.io.FileUtils;
+import htsjdk.tribble.util.ParsingUtils;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.math3.random.RandomDataGenerator;
 import org.apache.commons.math3.random.Well19937c;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 
+import javax.annotation.Nullable;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 public final class Utils {
 
@@ -26,6 +48,8 @@ public final class Utils {
     public static final Comparator<? super String> COMPARE_STRINGS_NULLS_FIRST = Comparator.nullsFirst(Comparator.naturalOrder());
 
     private Utils(){}
+
+    private final static DateTimeFormatter longDateTimeFormatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.LONG);
 
     /**
      *  Static random number generator and seed.
@@ -235,6 +259,24 @@ public final class Utils {
     }
 
     /**
+     * Concatenates byte arrays
+     * @return a concat of all bytes in allBytes in order
+     */
+    public static byte[] concat(final byte[] ... allBytes) {
+        int size = 0;
+        for ( final byte[] bytes : allBytes ) size += bytes.length;
+
+        final byte[] c = new byte[size];
+        int offset = 0;
+        for ( final byte[] bytes : allBytes ) {
+            System.arraycopy(bytes, 0, c, offset, bytes.length);
+            offset += bytes.length;
+        }
+
+        return c;
+    }
+
+    /**
      * Returns a {@link List List&lt;Integer&gt;} representation of an primitive int array.
      * @param values the primitive int array to represent.
      * @return never code {@code null}. The returned list will be unmodifiable yet it will reflect changes in values in the original array yet
@@ -310,6 +352,23 @@ public final class Utils {
     }
 
     /**
+     * Create a new string thats a n duplicate copies of s
+     * @param s the string to duplicate
+     * @param nCopies how many copies?
+     * @return a string
+     */
+    public static String dupString(final String s, int nCopies) {
+        if ( s == null || s.equals("") ) { throw new IllegalArgumentException("Bad s " + s); }
+        if ( nCopies < 0 ) { throw new IllegalArgumentException("nCopies must be >= 0 but got " + nCopies); }
+
+        final StringBuilder b = new StringBuilder();
+        for ( int i = 0; i < nCopies; i++ ) {
+            b.append(s);
+        }
+        return b.toString();
+    }
+
+    /**
      * Create a new byte array that's n copies of b
      * @param b the byte to duplicate
      * @param nCopies how many copies?
@@ -371,13 +430,13 @@ public final class Utils {
         final String[] split = args.split(delimiter);
         for (int i = 0; i < split.length - 1; i += 2) {
             final String arg = split[i].trim();
-            if (arg.length() > 0) { // if the unescaped arg has a size
+            if (!arg.isEmpty()) { // if the unescaped arg has a size
                 command = ArrayUtils.addAll(command, arg.split(" +"));
             }
             command = ArrayUtils.addAll(command, split[i + 1]);
         }
         final String arg = split[split.length - 1].trim();
-        if (split.length % 2 == 1 && arg.length() > 0) { // if the last unescaped arg has a size
+        if (split.length % 2 == 1 && !arg.isEmpty()) { // if the last unescaped arg has a size
             command = ArrayUtils.addAll(command, arg.split(" +"));
         }
         return command;
@@ -470,12 +529,40 @@ public final class Utils {
     /**
      * Calculates the MD5 for the specified file and returns it as a String
      *
+     * Warning: this loads the whole file into memory, so it's not suitable
+     * for large files.
+     *
      * @param file file whose MD5 to calculate
      * @return file's MD5 in String form
      * @throws IOException if the file could not be read
      */
     public static String calculateFileMD5( final File file ) throws IOException{
-        return Utils.calcMD5(FileUtils.readFileToByteArray(file));
+        return calculatePathMD5(file.toPath());
+    }
+
+    /**
+     * Calculates the MD5 for the specified file and returns it as a String
+     *
+     * Warning: this loads the whole file into memory, so it's not suitable
+     * for large files.
+     *
+     * @param path file whose MD5 to calculate
+     * @return file's MD5 in String form
+     * @throws IOException if the file could not be read
+     */
+    public static String calculatePathMD5(final Path path) throws IOException{
+        // This doesn't have as nice error messages as FileUtils, but it's close.
+        String fname = path.toUri().toString();
+        if (!Files.exists(path)) {
+            throw new FileNotFoundException("File '" + fname + "' does not exist");
+        }
+        if (Files.isDirectory(path)) {
+            throw new IOException("File '" + fname + "' exists but is a directory");
+        }
+        if (!Files.isRegularFile(path)) {
+            throw new IOException("File '" + fname + "' exists but is not a regular file");
+        }
+        return Utils.calcMD5(Files.readAllBytes(path));
     }
 
     /**
@@ -503,6 +590,21 @@ public final class Utils {
     }
 
     /**
+     * Checks that an {@link Object} is not {@code null} and returns the same object or throws an {@link IllegalArgumentException}
+     * @param object any Object
+     * @param message the text message that would be passed to the exception thrown when {@code o == null}.
+     * @return the same object
+     * @throws IllegalArgumentException if a {@code o == null}
+     */
+    public static <T> T nonNull(final T object, final Supplier<String> message) {
+        if (object == null) {
+            throw new IllegalArgumentException(message.get());
+        }
+        return object;
+    }
+
+
+    /**
      * Checks that a {@link Collection} is not {@code null} and that it is not empty.
      * If it's non-null and non-empty it returns the input, otherwise it throws an {@link IllegalArgumentException}
      * @param collection any Collection
@@ -521,6 +623,44 @@ public final class Utils {
 
     /**
      * Checks that a {@link Collection} is not {@code null} and that it is not empty.
+     * If it's non-null and non-empty it returns the true
+     * @param collection any Collection
+     * @return true if the collection exists and has elements
+     */
+    public static boolean isNonEmpty(Collection<?> collection){
+        return collection != null && !collection.isEmpty();
+    }
+
+    /**
+     * Checks that a {@link String} is not {@code null} and that it is not empty.
+     * If it's non-null and non-empty it returns the input, otherwise it throws an {@link IllegalArgumentException}
+     * @param string any String
+     * @param message a message to include in the output
+     * @return the original string
+     * @throws IllegalArgumentException if string is null or empty
+     */
+    public static String nonEmpty(String string, String message){
+        nonNull(string, "The string is null: " + message);
+        if(string.isEmpty()){
+            throw new IllegalArgumentException("The string is empty: " + message);
+        } else {
+            return string;
+        }
+    }
+
+    /**
+     * Checks that a {@link String} is not {@code null} and that it is not empty.
+     * If it's non-null and non-empty it returns the input, otherwise it throws an {@link IllegalArgumentException}
+     * @param string any String
+     * @return the original string
+     * @throws IllegalArgumentException if string is null or empty
+     */
+    public static String nonEmpty(final String string){
+        return nonEmpty(string, "string must not be null or empty");
+    }
+
+    /**
+     * Checks that a {@link Collection} is not {@code null} and that it is not empty.
      * If it's non-null and non-empty it returns the input, otherwise it throws an {@link IllegalArgumentException}
      * @param collection any Collection
      * @return the original collection
@@ -532,15 +672,35 @@ public final class Utils {
 
     /**
      * Checks that the collection does not contain a {@code null} value (throws an {@link IllegalArgumentException} if it does).
-     * The implementation calls {@code c.contains(null)} to determine the presence of null.
-     * @param c collection
+     * @param collection collection
      * @param message the text message that would be pass to the exception thrown when c contains a null.
-     * @throws IllegalArgumentException if a {@code o == null}
+     * @throws IllegalArgumentException if collection is null or contains any null elements
      */
-    public static void containsNoNull(final Collection<?> c, final String message) {
-        if (c.contains(null)){
+    public static void containsNoNull(final Collection<?> collection, final String message) {
+        Utils.nonNull(collection, message);
+        //cannot use Collection.contains(null) here because this throws a NullPointerException when used with many Sets
+        if (collection.stream().anyMatch(v -> v == null)){
             throw new IllegalArgumentException(message);
         }
+    }
+
+    /**
+     * Checks that the collection does not contain a duplicate value (throws an {@link IllegalArgumentException} if it does).
+     * The implementation creates a {@link Set} as an intermediate step or detecting duplicates and returns this Set because
+     * it is sometimes useful to do so.
+     *
+     * @param c collection
+     * @param message A message to emit in case of error, in addition to reporting the first duplicate value found.
+     * @throws IllegalArgumentException if a {@code o == null}
+     */
+    public static <E> Set<E> checkForDuplicatesAndReturnSet(final Collection<E> c, final String message) {
+        final Set<E> set = new LinkedHashSet<>();
+        for (final E element : c) {
+            if (!set.add(element)) {
+                throw new IllegalArgumentException(String.format(message + "  Value %s appears more than once.", element.toString()));
+            }
+        }
+        return set;
     }
 
     /**
@@ -565,24 +725,31 @@ public final class Utils {
         }
     }
 
-    /**
-     * Checks that a user provided file is in fact a regular (i.e. not a directory or a special device) readable file.
-     *
-     * @param file the input file to test.
-     * @throws IllegalArgumentException if {@code file} is {@code null} or {@code argName} is {@code null}.
-     * @throws UserException if {@code file} is not a regular file or it cannot be read.
-     * @return the same as the input {@code file}.
-     */
-    public static File regularReadableUserFile(final File file) {
-        nonNull(file, "unexpected null file reference");
-        if (!file.canRead()) {
-            throw new UserException.CouldNotReadInputFile(file.getAbsolutePath(),"the input file does not exist or cannot be read");
-        } else if (!file.isFile()) {
-            throw new UserException.CouldNotReadInputFile(file.getAbsolutePath(),"the input file is not a regular file");
-        } else {
-            return file;
+    public static void validateArg(final boolean condition, final Supplier<String> msg){
+        if (!condition){
+            throw new IllegalArgumentException(msg.get());
         }
     }
+
+    /**
+     * Check a condition that should always be true and throw an {@link IllegalStateException} if false.  If msg is not a
+     * String literal i.e. if it requires computation, use the Supplier<String> version, below.
+     */
+    public static void validate(final boolean condition, final String msg){
+        if (!condition){
+            throw new IllegalStateException(msg);
+        }
+    }
+
+    /**
+     * Check a condition that should always be true and throw an {@link IllegalStateException} if false.
+     */
+    public static void validate(final boolean condition, final Supplier<String> msg){
+        if (!condition){
+            throw new IllegalStateException(msg.get());
+        }
+    }
+
 
     /**
      * Calculates the optimum initial size for a hash table given the maximum number
@@ -657,7 +824,7 @@ public final class Utils {
     }
 
     /**
-     * Skims out positions of an array returning a shorter one with the remaning positions in the same order.
+     * Skims out positions of an array returning a shorter one with the remaining positions in the same order.
      *
      * <p>
      *     If the {@code dest} array provide is not long enough a new one will be created and returned with the
@@ -670,7 +837,7 @@ public final class Utils {
      * @param source the original array to splice.
      * @param sourceOffset the first position to skim.
      * @param dest the destination array.
-     * @param destOffset the first position where to copy the skimed array values.
+     * @param destOffset the first position where to copy the skimmed array values.
      * @param remove for each position in {@code original} indicates whether it should be spliced away ({@code true}),
      *               or retained ({@code false})
      * @param removeOffset the first position in the remove index array to consider.
@@ -844,14 +1011,6 @@ public final class Utils {
         return destClazz;
     }
 
-    public static byte [] arrayFromArrayWithLength(final byte[] array, final int length) {
-        final byte [] output = new byte[length];
-        for (int j = 0; j < length; j++) {
-            output[j] = array[(j % array.length)];
-        }
-        return output;
-    }
-
     /**
      * Checks if the read header contains any reads groups from non-Illumina and issue a warning of that's the case.
      */
@@ -861,5 +1020,355 @@ public final class Utils {
         if (readsHeader.getReadGroups().stream().anyMatch(rg -> NGSPlatform.fromReadGroupPL(rg.getPlatform()) !=  NGSPlatform.ILLUMINA)){
             logger.warn("This tool has only been well tested on ILLUMINA-based sequencing data. For other data use at your own risk.");
         }
+    }
+
+    /**
+     * Boolean xor operation.  Only true if x != y.
+     *
+     * @param x a boolean
+     * @param y a boolean
+     * @return true if x != y
+     */
+    public static boolean xor(final boolean x, final boolean y) {
+        return x != y;
+    }
+
+    /**
+     * Find the last occurrence of the query sequence in the reference sequence
+     *
+     * Returns the index of the last occurrence or -1 if the query sequence is not found
+     *
+     * @param reference the reference sequence
+     * @param query the query sequence
+     */
+    public static int lastIndexOf(final byte[] reference, final byte[] query) {
+        int queryLength = query.length;
+
+        // start search from the last possible matching position and search to the left
+        for (int r = reference.length - queryLength; r >= 0; r--) {
+            int q = 0;
+            while (q < queryLength && reference[r+q] == query[q]) {
+                q++;
+            }
+            if (q == queryLength) {
+                return r;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Simple wrapper for sticking elements of a int[] array into a List<Integer>
+     * @param ar - the array whose elements should be listified
+     * @return - a List<Integer> where each element has the same value as the corresponding index in @ar
+     */
+    public static List<Integer> listFromPrimitives(final int[] ar) {
+        Utils.nonNull(ar);
+        return Ints.asList(ar);
+    }
+
+    /**
+     * Concatenates a series of {@link Iterator}s (all of the same type) into a single {@link Iterator}.
+     * @param iterator an {@link Iterator} of {@link Iterator}s
+     * @param <T> the type of the iterator
+     * @return an {@link Iterator} over the underlying {@link Iterator}s
+     */
+    public static <T> Iterator<T> concatIterators(final Iterator<? extends Iterable<T>> iterator) {
+        Utils.nonNull(iterator, "iterator");
+
+        return new AbstractIterator<T>() {
+            Iterator<T> subIterator;
+            @Override
+            protected T computeNext() {
+                if (subIterator != null && subIterator.hasNext()) {
+                    return subIterator.next();
+                }
+                while (iterator.hasNext()) {
+                    subIterator = iterator.next().iterator();
+                    if (subIterator.hasNext()) {
+                        return subIterator.next();
+                    }
+                }
+                return endOfData();
+            }
+        };
+    }
+
+    public static <T> Stream<T> stream(final Iterable<T> iterable) {
+        return StreamSupport.stream(iterable.spliterator(), false);
+    }
+
+    public static <T> Stream<T> stream(final Iterator<T> iterator) {
+        return stream(() -> iterator);
+    }
+
+    /**
+     * Like Guava's {@link Iterators#transform(Iterator, com.google.common.base.Function)}, but runs a fixed number
+     * ({@code numThreads}) of transformations in parallel, while maintaining ordering of the output iterator.
+     * This is useful if the transformations are CPU intensive.
+     */
+    public static <F, T> Iterator<T> transformParallel(final Iterator<F> fromIterator, final Function<F, T> function, final int numThreads) {
+        Utils.nonNull(fromIterator, "fromIterator");
+        Utils.nonNull(function, "function");
+        Utils.validateArg(numThreads >= 1, "numThreads must be at least 1");
+
+        if (numThreads == 1) { // defer to Guava for single-threaded case
+            return Iterators.transform(fromIterator, new com.google.common.base.Function<F, T>() {
+                @Nullable
+                @Override
+                public T apply(@Nullable final F input) {
+                    return function.apply(input);
+                }
+            });
+        }
+        // use an executor service for the multi-threaded case
+        final ExecutorService executorService = Executors.newFixedThreadPool(numThreads);
+        final Queue<Future<T>> futures = new LinkedList<>();
+        return new AbstractIterator<T>() {
+            @Override
+            protected T computeNext() {
+                try {
+                    while (fromIterator.hasNext()) {
+                        if (futures.size() == numThreads) {
+                            return futures.remove().get();
+                        }
+                        final F next = fromIterator.next();
+                        final Future<T> future = executorService.submit(() -> function.apply(next));
+                        futures.add(future);
+                    }
+                    if (!futures.isEmpty()) {
+                        return futures.remove().get();
+                    }
+                    executorService.shutdown();
+                    return endOfData();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new GATKException("Problem running task", e);
+                }
+            }
+        };
+    }
+
+    /** Gets duplicated items in the collection. */
+    public static <T> Set<T> getDuplicatedItems(final Collection<T> objects) {
+        final Set<T> unique = new HashSet<>();
+        return objects.stream()
+                .filter(name -> !unique.add(name))
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Return the given {@code dateTime} formatted as string for display.
+     * @param dateTime the date/time to be formatted
+     * @return String representing the {@code dateTime}.
+     */
+    public static String getDateTimeForDisplay(final ZonedDateTime dateTime) {
+        return dateTime.format(longDateTimeFormatter);
+    }
+
+    /**
+     * Set the Locale to US English so that numbers will always be formatted in the US style.
+     */
+    public static void forceJVMLocaleToUSEnglish() {
+        Locale.setDefault(Locale.US);
+    }
+
+    /**
+     * Streams and sorts a collection of objects and returns the integer median entry of the sorted list
+     * @param values List of sortable entries from which to select the median
+     */
+    public static <T extends Comparable<?>> T getMedianValue(List<T> values) {
+        final List<T> sorted = values.stream().sorted().collect(Collectors.toList());
+        return sorted.get(sorted.size() / 2);
+    }
+
+
+    /**
+     * Splits a String using indexOf instead of regex to speed things up.
+     * This method produces the same results as {@link String#split(String)} and {@code String.split(String, 0)},
+     * but has been measured to be ~2x faster (see {@code StringSplitSpeedUnitTest} for details).
+     *
+     * @param str       the string to split.
+     * @param delimiter the delimiter used to split the string.
+     * @return A {@link List} of {@link String} tokens.
+     */
+    public static List<String> split(final String str, final char delimiter) {
+
+        final List<String> tokens;
+
+        if ( str.isEmpty() ) {
+            tokens = new ArrayList<>(1);
+            tokens.add("");
+        }
+        else {
+            tokens = ParsingUtils.split(str, delimiter);
+            removeTrailingEmptyStringsFromEnd(tokens);
+        }
+
+        return tokens;
+    }
+
+    /**
+     * Splits a String using indexOf instead of regex to speed things up.
+     * If given an empty delimiter, will return each character in the string as a token.
+     * This method produces the same results as {@link String#split(String)} and {@code String.split(String, 0)},
+     * but has been measured to be ~2x faster (see {@code StringSplitSpeedUnitTest} for details).
+     *
+     * @param str       the string to split.
+     * @param delimiter the delimiter used to split the string.
+     * @return A {@link List} of {@link String} tokens.
+     */
+    public static List<String> split(final String str, final String delimiter) {
+        // This is 10 because the ArrayList default capacity is 10 (but private).
+        return split(str, delimiter, 10);
+    }
+
+    /**
+     * Splits a given {@link String} using {@link String#indexOf} instead of regex to speed things up.
+     * If given an empty delimiter, will return each character in the string as a token.
+     * This method produces the same results as {@link String#split(String)} and {@code String.split(String, 0)},
+     * but has been measured to be ~2x faster (see {@code StringSplitSpeedUnitTest} for details).
+     *
+     * @param str               The {@link String} to split.
+     * @param delimiter         The delimiter used to split the {@link String}.
+     * @param expectedNumTokens The number of tokens expected (used to initialize the capacity of the {@link ArrayList}).
+     * @return A {@link List} of {@link String} tokens.
+     */
+    private static List<String> split(final String str, final String delimiter, final int expectedNumTokens) {
+        final List<String> result;
+
+        if ( str.isEmpty() ) {
+            result = new ArrayList<>(1);
+            result.add("");
+        }
+        else if ( delimiter.isEmpty() ) {
+            result = new ArrayList<>(str.length());
+            for ( int i = 0; i < str.length(); ++i ) {
+                result.add(str.substring(i, i + 1));
+            }
+        }
+        else if ( delimiter.length() == 1 ) {
+            result = split(str, delimiter.charAt(0));
+        }
+        else {
+            result = new ArrayList<>(expectedNumTokens);
+
+            int delimiterIdx = -1;
+            int tokenStartIdx = delimiterIdx + 1;
+            do {
+                delimiterIdx = str.indexOf(delimiter, tokenStartIdx);
+                final String token = (delimiterIdx != -1 ? str.substring(tokenStartIdx, delimiterIdx) : str.substring(tokenStartIdx));
+                result.add(token);
+                tokenStartIdx = delimiterIdx + delimiter.length();
+            } while ( delimiterIdx != -1 );
+
+            removeTrailingEmptyStringsFromEnd(result);
+        }
+
+        return result;
+    }
+
+    private static void removeTrailingEmptyStringsFromEnd(final List<String> result) {
+        // Remove all trailing empty strings to emulate the behavior of String.split:
+        // We remove items from the end of the list to our index
+        // so that we can take advantage of better performance of removing items from the end
+        // of certain concrete lists:
+        while ( (!result.isEmpty()) && (result.get(result.size() - 1).isEmpty()) ) {
+            result.remove(result.size() - 1);
+        }
+    }
+
+    /**
+     * Take a map of a value to a list and reverse it.  Note that no assumptions of uniqueness are made, so returned
+     *  values are also lists.
+     *
+     *  <p>For example:</p>
+     *
+     *  Input:<br/>
+     *  k ->  {a,b} <br/>
+     *  j ->  {a} <br/>
+     *
+     *  Output:<br/>
+     *  a ->  {k,j} <br/>
+     *  b ->  {k} <br/>
+     *
+     *  Any sorting in the input map will be lost in the output.
+     *
+     * @param somethingToListMap a map from a value to a list of values.  Never {@code null}
+     * @param <T> class of the key of the input
+     * @param <U> class of the values in the list of the input
+     * @return A new mapping from class of values to set of keys.  Never {@code null}
+     */
+    public static <T,U> Map<U, Set<T>> getReverseValueToListMap(final Map<T, List<U>> somethingToListMap) {
+        final Map<U, Set<T>> result = new HashMap<>();
+
+        for (final Map.Entry<T, List<U>> entry : somethingToListMap.entrySet()) {
+            entry.getValue().forEach(v -> result.computeIfAbsent(v, k -> new HashSet<>()).add(entry.getKey()));
+        }
+
+        return result;
+    }
+
+    /**
+     * Convenience function that formats a percentage as a %.2f string
+     *
+     * @param x number of objects part of total that meet some criteria
+     * @param total count of all objects, including x
+     * @return a String percent rate, or NA if total == 0
+     */
+    public static String formattedPercent(final long x, final long total) {
+        return total == 0 ? "NA" : String.format("%.2f", (100.0*x) / total);
+    }
+
+    /**
+     * Convenience function that formats a ratio as a %.2f string
+     *
+     * @param num  number of observations in the numerator
+     * @param denom number of observations in the denumerator
+     * @return a String formatted ratio, or NA if all == 0
+     */
+    public static String formattedRatio(final long num, final long denom) {
+        return denom == 0 ? "NA" : String.format("%.2f", num / (1.0 * denom));
+    }
+
+    /**
+     * Given a collection of strings and a collection of regular expressions, generates the set of strings that match
+     * any expression
+     * @param sourceValues collection of strings from which to to select
+     * @param filterExpressions list of expressions to use for matching
+     * @param exactMatch If true match filters exactly, otherwise use as both exact and regular expressions
+     * @return A new set strings from sourceValues that satisfy at least one of the expressions in sampleExpressions
+     */
+    public static Set<String> filterCollectionByExpressions(final Collection<String> sourceValues, final Collection<String> filterExpressions, final boolean exactMatch) {
+        Utils.nonNull(filterExpressions);
+        Utils.nonNull(sourceValues);
+
+        final Set<String> filteredValues = new LinkedHashSet<>();
+
+        Collection<Pattern> patterns = null;
+        if (!exactMatch) {
+            patterns = compilePatterns(filterExpressions);
+        }
+        for (final String value : sourceValues) {
+            if (filterExpressions.contains(value)) {
+                filteredValues.add(value);
+            } else if (!exactMatch) {
+                for (final Pattern pattern : patterns) {
+                    if (pattern.matcher(value).find()) {
+                        filteredValues.add(value);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return filteredValues;
+    }
+
+    private static Collection<Pattern> compilePatterns(final Collection<String> filters) {
+        final Collection<Pattern> patterns = new ArrayList<Pattern>();
+        for (final String filter: filters) {
+            patterns.add(Pattern.compile(filter));
+        }
+        return patterns;
     }
 }

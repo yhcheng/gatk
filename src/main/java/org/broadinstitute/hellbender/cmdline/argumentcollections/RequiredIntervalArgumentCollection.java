@@ -1,7 +1,9 @@
 package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
 
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +15,9 @@ import java.util.List;
 public final class RequiredIntervalArgumentCollection extends IntervalArgumentCollection {
     private static final long serialVersionUID = 1L;
 
-    @Argument(fullName = "intervals", shortName = "L", doc = "One or more genomic intervals over which to operate", optional = false)
+    // Interval list files such as Picard interval lists are structured and require specialized parsing that
+    // is handled by IntervalUtils, so use suppressFileExpansion to bypass command line parser auto-expansion.
+    @Argument(fullName = StandardArgumentDefinitions.INTERVALS_LONG_NAME, shortName = StandardArgumentDefinitions.INTERVALS_SHORT_NAME, suppressFileExpansion = true, doc = "One or more genomic intervals over which to operate", optional = false)
     protected final List<String> intervalStrings = new ArrayList<>();
 
     @Override
@@ -23,10 +27,7 @@ public final class RequiredIntervalArgumentCollection extends IntervalArgumentCo
 
     @Override
     protected void addToIntervalStrings(String newInterval) {
-        if ( traversalParameters != null ) {
-            throw new IllegalStateException("addToIntervalStrings() cannot be called after interval parsing is complete");
-        }
-
+        Utils.validate(traversalParameters == null, "addToIntervalStrings() cannot be called after interval parsing is complete");
         intervalStrings.add(newInterval);
     }
 }

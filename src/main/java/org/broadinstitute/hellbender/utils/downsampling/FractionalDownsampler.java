@@ -40,16 +40,18 @@ public final class FractionalDownsampler extends ReadsDownsampler {
 
     @Override
     public void submit( final GATKRead newRead ) {
+        Utils.nonNull(newRead, "newRead");
+
         if ( Utils.getRandomGenerator().nextInt(10000) < cutoffForInclusion) {
             selectedReads.add(newRead);
         } else {
-            numDiscardedItems++;
+            incrementNumberOfDiscardedItems(1);
         }
     }
 
     @Override
     public boolean hasFinalizedItems() {
-        return selectedReads.size() > 0;
+        return !selectedReads.isEmpty();
     }
 
     @Override

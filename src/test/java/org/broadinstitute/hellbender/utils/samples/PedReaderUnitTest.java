@@ -1,6 +1,10 @@
 package org.broadinstitute.hellbender.utils.samples;
 
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.broadinstitute.barclay.argparser.CommandLineException;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -8,9 +12,6 @@ import org.testng.annotations.Test;
 import java.io.StringReader;
 import java.util.*;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.exceptions.UserException;
 
 /**
  * UnitTest for PedReader
@@ -18,8 +19,8 @@ import org.broadinstitute.hellbender.exceptions.UserException;
  * @author Mark DePristo
  * @since 2011
  */
-public class PedReaderUnitTest extends BaseTest {
-    private static Logger logger = Logger.getLogger(PedReaderUnitTest.class);
+public class PedReaderUnitTest extends GATKBaseTest {
+    private static Logger logger = LogManager.getLogger(PedReaderUnitTest.class);
 
     private class PedReaderTest extends TestDataProvider {
         public String fileContents;
@@ -140,7 +141,7 @@ public class PedReaderUnitTest extends BaseTest {
         PedReader reader = new PedReader();
         SampleDB sampleDB = new SampleDB();
         List<Sample> readSamples = reader.parse(myFileContents, missing, sampleDB);
-        Assert.assertEquals(new HashSet<Sample>(test.expectedSamples), new HashSet<Sample>(readSamples));
+        Assert.assertEquals(new LinkedHashSet<Sample>(test.expectedSamples), new LinkedHashSet<Sample>(readSamples));
     }
 
     @Test(enabled = true, dataProvider = "readerTest")
@@ -293,12 +294,12 @@ public class PedReaderUnitTest extends BaseTest {
         Assert.assertEquals(test.expected, parsed, "Failed to properly parse tags " + test.tags);
     }
 
-    @Test(enabled = true, expectedExceptions = UserException.class)
+    @Test(enabled = true, expectedExceptions = CommandLineException.class)
     public void testPedReaderTagParsing1() {
         EnumSet<PedReader.MissingPedField> parsed = PedReader.parseMissingFieldTags("test", Arrays.asList("XXX"));
     }
 
-    @Test(enabled = true, expectedExceptions = UserException.class)
+    @Test(enabled = true, expectedExceptions = CommandLineException.class)
     public void testPedReaderTagParsing2() {
         EnumSet<PedReader.MissingPedField> parsed = PedReader.parseMissingFieldTags("test", Arrays.asList("NO_SEX", "XXX"));
     }

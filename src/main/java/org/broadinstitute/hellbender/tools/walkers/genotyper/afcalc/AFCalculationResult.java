@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper.afcalc;
 
 import htsjdk.variant.variantcontext.Allele;
+import org.apache.commons.math3.util.MathArrays;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 
@@ -19,6 +20,12 @@ public final class AFCalculationResult {
     private static final int AF0 = 0;
     private static final int AF1p = 1;
     private static final int LOG_10_ARRAY_SIZES = 2;
+
+    // In GVCF mode the STANDARD_CONFIDENCE_FOR_CALLING is 0 by default, and it's nice having this easily-interpretable
+    // threshold that says "call anything with any evidence at all."  The problem is that *everything* has at least some evidence,
+    // so this would end up putting every site, or at least too many sites, in the gvcf.  Thus this parameter is in place to say
+    // that "0" really means "epsilon."
+    private static final double EPSILON = 1.0e-10;
 
     private final double[] log10LikelihoodsOfAC;
     private final double[] log10PriorsOfAC;
@@ -67,11 +74,10 @@ public final class AFCalculationResult {
         }
         if ( ! allelesUsedInGenotyping.containsAll(log10pRefByAllele.keySet()) ) {
             throw new IllegalArgumentException("log10pRefByAllele doesn't contain all of the alleles used in genotyping: log10pRefByAllele " + log10pRefByAllele + " but allelesUsedInGenotyping " + allelesUsedInGenotyping);
-        }
-        if ( ! MathUtils.goodLog10ProbVector(log10LikelihoodsOfAC, LOG_10_ARRAY_SIZES, false) ) {
+        }if ( ! MathUtils.goodLog10ProbVector(log10LikelihoodsOfAC, LOG_10_ARRAY_SIZES, false) ) {
             throw new IllegalArgumentException("log10LikelihoodsOfAC are bad " + Utils.join(",", log10LikelihoodsOfAC));
         }
-        if ( ! MathUtils.goodLog10ProbVector(log10PriorsOfAC, LOG_10_ARRAY_SIZES, true) ) {
+        if ( ! MathUtils.goodLog10ProbVector(log10PriorsOfAC, LOG_10_ARRAY_SIZES, false) ) {
             throw new IllegalArgumentException("log10priors are bad " + Utils.join(",", log10PriorsOfAC));
         }
 
@@ -82,7 +88,7 @@ public final class AFCalculationResult {
         this.log10LikelihoodsOfAC = Arrays.copyOf(log10LikelihoodsOfAC, LOG_10_ARRAY_SIZES);
         this.log10PriorsOfAC = Arrays.copyOf(log10PriorsOfAC, LOG_10_ARRAY_SIZES);
         this.log10PosteriorsOfAC = computePosteriors(log10LikelihoodsOfAC, log10PriorsOfAC);
-        this.log10pRefByAllele = Collections.unmodifiableMap(new HashMap<>(log10pRefByAllele));
+        this.log10pRefByAllele = Collections.unmodifiableMap(new LinkedHashMap<>(log10pRefByAllele));
     }
 
     /**
@@ -206,7 +212,7 @@ public final class AFCalculationResult {
      */
     public boolean isPolymorphic(final Allele allele, final double log10minPNonRef) {
         Utils.nonNull(allele);
-        return getLog10PosteriorOfAFEq0ForAllele(allele) < log10minPNonRef;
+        return getLog10PosteriorOfAFEq0ForAllele(allele) + EPSILON < log10minPNonRef;
     }
 
     /**
@@ -258,11 +264,8 @@ public final class AFCalculationResult {
      * @return freshly allocated log10 normalized posteriors vector
      */
     private static double[] computePosteriors(final double[] log10LikelihoodsOfAC, final double[] log10PriorsOfAC) {
-        final double[] log10UnnormalizedPosteriors = new double[log10LikelihoodsOfAC.length];
-        for ( int i = 0; i < log10LikelihoodsOfAC.length; i++ ) {
-            log10UnnormalizedPosteriors[i] = log10LikelihoodsOfAC[i] + log10PriorsOfAC[i];
-        }
-        return MathUtils.normalizeFromLog10(log10UnnormalizedPosteriors, true, false);
+        final double[] log10UnnormalizedPosteriors = MathArrays.ebeAdd(log10LikelihoodsOfAC, log10PriorsOfAC);
+        return MathUtils.normalizeLog10(log10UnnormalizedPosteriors);
     }
 
     /**

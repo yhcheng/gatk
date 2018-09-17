@@ -1,7 +1,8 @@
 package org.broadinstitute.hellbender.tools;
 
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
@@ -11,11 +12,32 @@ import java.io.Serializable;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
 
+/**
+ * Accumulate flag statistics given a BAM file, e.g. total number of reads with QC failure flag set, number of
+ * duplicates, percentage mapped etc.
+ *
+ * <h3>Input</h3>
+ * <ul>
+ *     <li>A BAM file containing aligned read data</li>
+ * </ul>
+ *
+ * <h3>Output</h3>
+ * <ul>
+ *     <li>Accumulated flag statistics</li>
+ * </ul>
+ *
+ * <h3>Example Usage</h3>
+ * <pre>
+ *   gatk FlagStat \
+ *     -I input.bam
+ * </pre>
+ */
+@DocumentedFeature
 @CommandLineProgramProperties(
-	summary = "Walks over all input data, accumulating statistics such as total number of read\n" +
-            "reads with QC failure flag set, number of duplicates, percentage mapped, etc.",
-	oneLineSummary = "A reimplementation of the 'samtools flagstat' subcommand",
-    programGroup = ReadProgramGroup.class
+	summary = "Accumulate flag statistics given a BAM file, e.g. total number of reads with QC failure flag set, " +
+            "number of duplicates, percentage mapped etc.",
+	oneLineSummary = "Accumulate flag statistics given a BAM file",
+    programGroup = DiagnosticsAndQCProgramGroup.class
 )
 public final class FlagStat extends ReadWalker {
 

@@ -4,10 +4,13 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.primitives.Bytes;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.jgrapht.EdgeFactory;
 
 import java.io.File;
-import java.util.*;
+import java.util.Collection;
+import java.util.LinkedList;
+import java.util.List;
 
 /**
  * A graph that contains base sequence at each node
@@ -18,6 +21,7 @@ public final class SeqGraph extends BaseGraph<SeqVertex, BaseEdge> {
 
     private static final long serialVersionUID = 1l;
 
+    @Override
     public SeqGraph clone() {
         return (SeqGraph) super.clone();
     }
@@ -240,9 +244,7 @@ public final class SeqGraph extends BaseGraph<SeqVertex, BaseEdge> {
      * @return true if we actually merged at least two vertices together
      */
     private boolean mergeLinearChain(final LinkedList<SeqVertex> linearChain) {
-        if ( linearChain.isEmpty() ) {
-            throw new IllegalArgumentException("BUG: cannot have linear chain with 0 elements but got " + linearChain);
-        }
+        Utils.validateArg(!linearChain.isEmpty(), () -> "BUG: cannot have linear chain with 0 elements but got " + linearChain);
 
         final SeqVertex first = linearChain.getFirst();
         final SeqVertex last = linearChain.getLast();

@@ -3,10 +3,15 @@ package org.broadinstitute.hellbender.tools.walkers.annotator;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.TextCigarCodec;
 import htsjdk.variant.variantcontext.*;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
+import org.broadinstitute.hellbender.tools.exome.orientationbiasvariantfilter.OrientationBiasUtils;
 import org.broadinstitute.hellbender.utils.QualityUtils;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.*;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.testutils.ArtificialAnnotationUtils;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.testng.Assert;
@@ -16,6 +21,9 @@ import org.testng.annotations.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 public final class OxoGReadCountsUnitTest {
     @Test
@@ -24,48 +32,24 @@ public final class OxoGReadCountsUnitTest {
         final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "myRead", 0, 1, 76);
 
         read.setMappingQuality(60);
-        Assert.assertTrue(OxoGReadCounts.isUsableRead(read));
+        Assert.assertTrue(ReadUtils.readHasReasonableMQ(read));
 
         read.setMappingQuality(0);
-        Assert.assertFalse(OxoGReadCounts.isUsableRead(read));
+        Assert.assertFalse(ReadUtils.readHasReasonableMQ(read));
 
         read.setMappingQuality(QualityUtils.MAPPING_QUALITY_UNAVAILABLE);
-        Assert.assertFalse(OxoGReadCounts.isUsableRead(read));
+        Assert.assertFalse(ReadUtils.readHasReasonableMQ(read));
     }
 
     @Test
     public void testDescriptions() {
-        Assert.assertEquals(new OxoGReadCounts().getKeyNames(), Arrays.asList(GATKVCFConstants.OXOG_ALT_F1R2_KEY,
-                GATKVCFConstants.OXOG_ALT_F2R1_KEY,
-                GATKVCFConstants.OXOG_REF_F1R2_KEY,
-                GATKVCFConstants.OXOG_REF_F2R1_KEY,
-                GATKVCFConstants.OXOG_FRACTION_KEY), "annots");
+        Assert.assertEquals(new OxoGReadCounts().getKeyNames(), Arrays.asList(GATKVCFConstants.F1R2_KEY, GATKVCFConstants.F2R1_KEY));
         Assert.assertEquals(new OxoGReadCounts().getDescriptions(),
                 Arrays.asList(
-                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.OXOG_ALT_F1R2_KEY),
-                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.OXOG_ALT_F2R1_KEY),
-                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.OXOG_REF_F1R2_KEY),
-                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.OXOG_REF_F2R1_KEY),
-                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.OXOG_FRACTION_KEY))
+                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.F1R2_KEY),
+                        GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.F2R1_KEY))
         );
     }
-
-    private GATKRead makeRead(final Allele ref, final Allele alt, final boolean isRefRead, final boolean isF1R2Read, final PerReadAlleleLikelihoodMap map, int name){
-        final GATKRead read = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode(10 + "M"), "random_read_" + isRefRead + "_" + isF1R2Read + "_" + name);
-        read.setMappingQuality(20);
-        if (isF1R2Read){
-            F1R2(read);
-        } else {
-            F2R1(read);
-        }
-        if (isRefRead){
-            ref(map, ref, alt, read);
-        } else {
-            alt(map, ref, alt, read);
-        }
-        return read;
-    }
-
 
     private static final Allele refA = Allele.create("A", true);
     private static final Allele refC = Allele.create("C", true);
@@ -98,82 +82,57 @@ public final class OxoGReadCountsUnitTest {
 
     @Test(dataProvider = "allPairs")
     public void testUsingReads(final Allele refAllele, final Allele altAllele){
-        final int alt_F1R2 = 1;
-        final int alt_F2R1 = 2;
-        final int ref_F1R2 = 4;
-        final int ref_F2R1 = 8;
-
-        final PerReadAlleleLikelihoodMap map= new PerReadAlleleLikelihoodMap();
+        final int altF1R2 = 1;
+        final int altF2R1 = 2;
+        final int refF1R2 = 4;
+        final int refF2R1 = 8;
 
         final List<Allele> alleles = Arrays.asList(refAllele, altAllele);
         final Genotype g = new GenotypeBuilder(sample1, alleles).DP(dpDepth).make();
-        final VariantContext vc = makeReads(alt_F1R2, alt_F2R1, ref_F1R2, ref_F2R1, map, refAllele, altAllele, alleles, g);
+        final Pair<VariantContext, ReadLikelihoods<Allele>> pair = makeReads(altF1R2, altF2R1, refF1R2, refF2R1, refAllele, altAllele, alleles, g);
+        final VariantContext vc = pair.getLeft();
+        final ReadLikelihoods<Allele> likelihoods = pair.getRight();
         final GenotypeBuilder gb = new GenotypeBuilder(g);
-        new OxoGReadCounts().annotate(null, vc, g, gb, map);
-        final int actual_alt_F1R2 = (int) gb.make().getExtendedAttribute(GATKVCFConstants.OXOG_ALT_F1R2_KEY);
-        Assert.assertEquals(actual_alt_F1R2, alt_F1R2, GATKVCFConstants.OXOG_ALT_F1R2_KEY);
+        new OxoGReadCounts().annotate(null, vc, g, gb, likelihoods);
 
-        final int actual_alt_F2R1 = (int) gb.make().getExtendedAttribute(GATKVCFConstants.OXOG_ALT_F2R1_KEY);
-        Assert.assertEquals(actual_alt_F2R1, alt_F2R1, GATKVCFConstants.OXOG_ALT_F2R1_KEY);
+        Assert.assertEquals(OrientationBiasUtils.getF1R2(gb.make()), new int[] {refF1R2, altF1R2});
 
-        final int actual_ref_F2R1 = (int) gb.make().getExtendedAttribute(GATKVCFConstants.OXOG_REF_F2R1_KEY);
-        Assert.assertEquals(actual_ref_F2R1, ref_F2R1, GATKVCFConstants.OXOG_REF_F2R1_KEY);
-
-        final int actual_ref_F1R2 = (int) gb.make().getExtendedAttribute(GATKVCFConstants.OXOG_REF_F1R2_KEY);
-        Assert.assertEquals(actual_ref_F1R2, ref_F1R2, GATKVCFConstants.OXOG_REF_F1R2_KEY);
-
-        final double actual_fraction = (double) gb.make().getExtendedAttribute(GATKVCFConstants.OXOG_FRACTION_KEY);
-        final double num = refAllele.equals(refA) || refAllele.equals(refC) ? alt_F2R1 : alt_F1R2;
-        final double expectedFraction = num / (alt_F1R2 + alt_F2R1);
-        Assert.assertEquals(actual_fraction, expectedFraction, GATKVCFConstants.OXOG_FRACTION_KEY);
+        Assert.assertEquals(OrientationBiasUtils.getF2R1(gb.make()), new int[] {refF2R1, altF2R1});
 
         //now test a no-op
         final GenotypeBuilder gb1 = new GenotypeBuilder(g);
-        new OxoGReadCounts().annotate(null, vc, null, gb1, map);  //null genotype
+        new OxoGReadCounts().annotate(null, vc, null, gb1, likelihoods);  //null genotype
         Assert.assertFalse(gb1.make().hasAD());
     }
 
-    private VariantContext makeReads(int alt_F1R2, int alt_F2R1, int ref_F1R2, int ref_F2R1, PerReadAlleleLikelihoodMap map, Allele refAllele, Allele altAllele, List<Allele> alleles, Genotype g) {
-        for (int i = 0; i < alt_F1R2; i++) {
-            makeRead(refAllele, altAllele, false, true, map, i);
-        }
-        for (int i = 0; i < alt_F2R1; i++) {
-            makeRead(refAllele, altAllele, false, false, map, i);
-        }
-        for (int i = 0; i < ref_F1R2; i++) {
-            makeRead(refAllele, altAllele, true, true, map, i);
-        }
-        for (int i = 0; i < ref_F2R1; i++) {
-            makeRead(refAllele, altAllele, true, false, map, i);
-        }
-        //throw in one non-informative read
+    private Pair<VariantContext, ReadLikelihoods<Allele>> makeReads(int alt_F1R2, int alt_F2R1, int ref_F1R2, int ref_F2R1, Allele refAllele, Allele altAllele, List<Allele> alleles, Genotype g) {
+        final List<GATKRead> altReads = Stream.concat(IntStream.range(0, alt_F1R2).mapToObj(i -> makeRead(false, true, i)),
+                IntStream.range(0, alt_F2R1).mapToObj(i -> makeRead(false, false, i))).collect(Collectors.toList());
+        final List<GATKRead> refReads = Stream.concat(IntStream.range(0, ref_F1R2).mapToObj(i -> makeRead(true, true, i)),
+                IntStream.range(0, ref_F2R1).mapToObj(i -> makeRead(true, false, i))).collect(Collectors.toList());
         final GATKRead badRead = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode(10 + "M"));
         badRead.setMappingQuality(20);
-        map.add(badRead, refAllele, -1.0);
-        map.add(badRead, altAllele, -1.1); //maybe it's ref, maybe it's alt, too close to call -> not informative
 
-        return new VariantContextBuilder("test", "20", 10, 10, alleles).genotypes(Arrays.asList(g)).make();
+        final ReadLikelihoods<Allele> likelihoods =
+                ArtificialAnnotationUtils.makeLikelihoods(sample1, refReads, altReads, Arrays.asList(badRead), -100.0, -10.0, -1.1, refAllele, altAllele);
+
+        return ImmutablePair.of(new VariantContextBuilder("test", "20", 10, 10, alleles).genotypes(Arrays.asList(g)).make(),
+                likelihoods);
     }
 
-    private void ref(PerReadAlleleLikelihoodMap map, Allele a, Allele c, GATKRead read) {
-        map.add(read, a, -1.0);
-        map.add(read, c, -100.0);  //try to fool it - add another likelihood to same read
+    private GATKRead makeRead(final boolean isRefRead, final boolean isF1R2Read, int name){
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode(10 + "M"), "random_read_" + isRefRead + "_" + isF1R2Read + "_" + name);
+        read.setMappingQuality(20);
+        if (isF1R2Read){
+            read.setIsPaired(true);
+            read.setIsReverseStrand(false);
+            read.setIsFirstOfPair();
+        } else {
+            read.setIsReverseStrand(false);
+            read.setIsPaired(true);
+            read.setIsSecondOfPair();
+        }
+        return read;
     }
 
-    private void alt(PerReadAlleleLikelihoodMap map, Allele a, Allele c, GATKRead read) {
-        map.add(read, a, -10.0);
-        map.add(read, c, -1.0);      //try to fool it - add another likelihood to same read
-    }
-
-    private void F2R1(GATKRead read) {
-        read.setIsReverseStrand(false);
-        read.setIsPaired(true);
-        read.setIsSecondOfPair();
-    }
-
-    private void F1R2(GATKRead read) {
-        read.setIsPaired(true);
-        read.setIsReverseStrand(false);
-        read.setIsFirstOfPair();
-    }
 }

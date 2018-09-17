@@ -1,9 +1,13 @@
 package org.broadinstitute.hellbender.utils.gcs;
 
-import com.google.cloud.dataflow.sdk.options.PipelineOptions;
+import com.google.cloud.storage.contrib.nio.CloudStorageConfiguration;
 import htsjdk.samtools.util.IOUtil;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.MiniClusterUtils;
+import java.net.URI;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
+import org.broadinstitute.hellbender.utils.config.ConfigFactory;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -12,25 +16,49 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 
-public final class BucketUtilsTest extends BaseTest {
+public final class BucketUtilsTest extends GATKBaseTest {
 
-    @Test
+    static {
+        BucketUtils.setGlobalNIODefaultOptions(
+            ConfigFactory.getInstance().getGATKConfig().gcsMaxRetries(),
+            ConfigFactory.getInstance().getGATKConfig().gcsProjectForRequesterPays());
+    }
+
+    @Test(groups={"bucket"})
     public void testIsCloudStorageURL(){
-        Assert.assertTrue(BucketUtils.isCloudStorageUrl("gs://a_bucket/bucket"));
+        Assert.assertTrue(BucketUtils.isCloudStorageUrl("gs://abucket/bucket"));
         Assert.assertFalse(BucketUtils.isCloudStorageUrl("hdfs://namenode/path/to/file"));
         Assert.assertFalse(BucketUtils.isCloudStorageUrl("localFile"));
+
+        Assert.assertTrue(BucketUtils.isCloudStorageUrl(Paths.get(URI.create("gs://abucket/bucket"))));
+        // We cannot run this one because the HDFS provider looks for the "namenode" machine
+        // and throws an exception.
+        //Assert.assertFalse(BucketUtils.isCloudStorageUrl(Paths.get(URI.create("hdfs://namenode/path/to/file"))));
+        Assert.assertFalse(BucketUtils.isCloudStorageUrl(Paths.get("localFile")));
+
+        // this does not throw NullPointerException.
+        String x = "" + null + "://";
+    }
+
+    @Test
+    public void testGetCloudStorageConfiguration() {
+        String mockProject = "yes";
+        int mockReopens = 100;
+        CloudStorageConfiguration config = BucketUtils.getCloudStorageConfiguration(mockReopens, mockProject);
+        Assert.assertEquals(config.maxChannelReopens(), mockReopens);
+        Assert.assertEquals(config.userProject(), mockProject);
     }
 
     @Test
     public void testIsHadoopURL(){
-        Assert.assertFalse(BucketUtils.isHadoopUrl("gs://a_bucket/bucket"));
+        Assert.assertFalse(BucketUtils.isHadoopUrl("gs://abucket/bucket"));
         Assert.assertTrue(BucketUtils.isHadoopUrl("hdfs://namenode/path/to/file"));
         Assert.assertFalse(BucketUtils.isHadoopUrl("localFile"));
     }
 
     @Test
     public void testIsRemoteStorageURL(){
-        Assert.assertTrue(BucketUtils.isRemoteStorageUrl("gs://a_bucket/bucket"));
+        Assert.assertTrue(BucketUtils.isRemoteStorageUrl("gs://abucket/bucket"));
         Assert.assertTrue(BucketUtils.isRemoteStorageUrl("hdfs://namenode/path/to/file"));
         Assert.assertFalse(BucketUtils.isRemoteStorageUrl("localFile"));
     }
@@ -39,7 +67,7 @@ public final class BucketUtilsTest extends BaseTest {
     public void testIsFileURL(){
         Assert.assertTrue(BucketUtils.isFileUrl("file:///somefile/something"));
         Assert.assertTrue(BucketUtils.isFileUrl("file:/something"));
-        Assert.assertFalse(BucketUtils.isFileUrl("gs://a_bucket"));
+        Assert.assertFalse(BucketUtils.isFileUrl("gs://abucket"));
     }
 
     @Test
@@ -47,7 +75,7 @@ public final class BucketUtilsTest extends BaseTest {
         final String src = publicTestDir+"empty.vcf";
         File dest = createTempFile("copy-empty",".vcf");
 
-        BucketUtils.copyFile(src, null, dest.getPath());
+        BucketUtils.copyFile(src, dest.getPath());
         IOUtil.assertFilesEqual(new File(src), dest);
     }
 
@@ -57,7 +85,7 @@ public final class BucketUtilsTest extends BaseTest {
         try (FileWriter fw = new FileWriter(dest)){
             fw.write("Goodbye, cruel world!");
         }
-        BucketUtils.deleteFile(dest.getPath(), null);
+        BucketUtils.deleteFile(dest.getPath());
         Assert.assertFalse(dest.exists(), "File '"+dest.getPath()+"' was not properly deleted as it should.");
     }
 
@@ -67,13 +95,19 @@ public final class BucketUtilsTest extends BaseTest {
         File dest = createTempFile("copy-empty", ".vcf");
         final String intermediate = BucketUtils.randomRemotePath(getGCPTestStaging(), "test-copy-empty", ".vcf");
         Assert.assertTrue(BucketUtils.isCloudStorageUrl(intermediate), "!BucketUtils.isCloudStorageUrl(intermediate)");
-        PipelineOptions popts = getAuthenticatedPipelineOptions();
-        BucketUtils.copyFile(src, popts, intermediate);
-        BucketUtils.copyFile(intermediate, popts, dest.getPath());
+        BucketUtils.copyFile(src, intermediate);
+        BucketUtils.copyFile(intermediate, dest.getPath());
         IOUtil.assertFilesEqual(new File(src), dest);
-        Assert.assertTrue(BucketUtils.fileExists(intermediate, popts));
-        BucketUtils.deleteFile(intermediate, popts);
-        Assert.assertFalse(BucketUtils.fileExists(intermediate, popts));
+        Assert.assertTrue(BucketUtils.fileExists(intermediate));
+        BucketUtils.deleteFile(intermediate);
+        Assert.assertFalse(BucketUtils.fileExists(intermediate));
+    }
+
+    @Test(groups={"bucket"})
+    public void testGetPathOnGcsDirectory() throws Exception {
+        final String dirPath = "gs://bucket/my/dir/";
+        final Path pathOnGcs = BucketUtils.getPathOnGcs(dirPath);
+        Assert.assertEquals(pathOnGcs.toUri().toString(), dirPath);
     }
 
     @Test
@@ -85,13 +119,12 @@ public final class BucketUtilsTest extends BaseTest {
             final String intermediate = BucketUtils.randomRemotePath(MiniClusterUtils.getWorkingDir(cluster).toString(), "test-copy-empty", ".vcf");
             Assert.assertTrue(BucketUtils.isHadoopUrl(intermediate), "!BucketUtils.isHadoopUrl(intermediate)");
 
-            PipelineOptions popts = null;
-            BucketUtils.copyFile(src, popts, intermediate);
-            BucketUtils.copyFile(intermediate, popts, dest.getPath());
+            BucketUtils.copyFile(src, intermediate);
+            BucketUtils.copyFile(intermediate, dest.getPath());
             IOUtil.assertFilesEqual(new File(src), dest);
-            Assert.assertTrue(BucketUtils.fileExists(intermediate, popts));
-            BucketUtils.deleteFile(intermediate, popts);
-            Assert.assertFalse(BucketUtils.fileExists(intermediate, popts));
+            Assert.assertTrue(BucketUtils.fileExists(intermediate));
+            BucketUtils.deleteFile(intermediate);
+            Assert.assertFalse(BucketUtils.fileExists(intermediate));
         });
     }
 
@@ -110,10 +143,31 @@ public final class BucketUtilsTest extends BaseTest {
             }
         }
 
-        long fileSize = BucketUtils.fileSize(file1.getAbsolutePath(), null);
+        long fileSize = BucketUtils.fileSize(file1.getAbsolutePath());
         Assert.assertTrue(fileSize > 0);
-        long dirSize = BucketUtils.dirSize(dir.getAbsolutePath(), null);
+        long dirSize = BucketUtils.dirSize(dir.getAbsolutePath());
         Assert.assertEquals(dirSize, fileSize * 2);
+    }
+
+    @Test(groups={"bucket"})
+    public void testDirSizeGCS() throws IOException, GeneralSecurityException {
+        final String src = publicTestDir + "empty.vcf";
+        final String gcsSubDir = BucketUtils.randomRemotePath(getGCPTestStaging(), "dir-", "/");
+        final String intermediate = BucketUtils.randomRemotePath(gcsSubDir, "test-copy-empty", ".vcf");
+        BucketUtils.copyFile(src, intermediate);
+        Assert.assertTrue(BucketUtils.fileExists(intermediate));
+
+        long srcFileSize = BucketUtils.fileSize(src);
+        Assert.assertTrue(srcFileSize > 0);
+        long intermediateFileSize = BucketUtils.fileSize(intermediate);
+        Assert.assertEquals(intermediateFileSize, srcFileSize);
+        long intermediateDirSize = BucketUtils.dirSize(intermediate);
+        Assert.assertEquals(intermediateDirSize, srcFileSize);
+        long intermediateParentDirSize = BucketUtils.dirSize(gcsSubDir);
+        Assert.assertEquals(intermediateParentDirSize, srcFileSize);
+
+        BucketUtils.deleteFile(intermediate);
+        Assert.assertFalse(BucketUtils.fileExists(intermediate));
     }
 
 }

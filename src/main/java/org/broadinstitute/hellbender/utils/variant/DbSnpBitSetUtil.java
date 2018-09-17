@@ -5,6 +5,7 @@ import htsjdk.samtools.util.CloseableIterator;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFFileReader;
+import org.broadinstitute.hellbender.utils.Utils;
 
 import java.io.File;
 import java.util.*;
@@ -15,7 +16,7 @@ import java.util.*;
  */
 public final class DbSnpBitSetUtil {
 
-    private final Map<String, BitSet> sequenceToBitSet = new HashMap<>();
+    private final Map<String, BitSet> sequenceToBitSet = new LinkedHashMap<>();
 
     /** Little tuple class to contain one bitset for SNPs and another for Indels. */
     public static class DbSnpBitSets {
@@ -47,9 +48,8 @@ public final class DbSnpBitSetUtil {
     public DbSnpBitSetUtil(final File dbSnpFile,
                            final SAMSequenceDictionary sequenceDictionary,
                            final Collection<DbSnpVariantType> variantsToMatch) {
-
-        if (dbSnpFile == null) throw new IllegalArgumentException("null dbSnpFile");
-        final Map<DbSnpBitSetUtil, Set<DbSnpVariantType>> tmp = new HashMap<>();
+        Utils.nonNull(dbSnpFile);
+        final Map<DbSnpBitSetUtil, Set<DbSnpVariantType>> tmp = new LinkedHashMap<>();
         tmp.put(this, EnumSet.copyOf(variantsToMatch));
         loadVcf(dbSnpFile, sequenceDictionary, tmp);
     }

@@ -1,9 +1,11 @@
 package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,7 +15,7 @@ import java.util.List;
  */
 public final class RequiredReadInputArgumentCollection extends ReadInputArgumentCollection {
     private static final long serialVersionUID = 1L;
-    @Argument(fullName = StandardArgumentDefinitions.INPUT_LONG_NAME, shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME, doc = "BAM/SAM/CRAM file containing reads", optional = false)
+    @Argument(fullName = StandardArgumentDefinitions.INPUT_LONG_NAME, shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME, doc = "BAM/SAM/CRAM file containing reads", optional = false, common = true)
     public List<String> readFilesNames;
 
     @Override
@@ -21,6 +23,15 @@ public final class RequiredReadInputArgumentCollection extends ReadInputArgument
         ArrayList<File> ret = new ArrayList<>();
         for (String fn : readFilesNames) {
             ret.add(new File(fn));
+        }
+        return ret;
+    }
+
+    @Override
+    public List<Path> getReadPaths() {
+        ArrayList<Path> ret = new ArrayList<>();
+        for (String fn : readFilesNames) {
+            ret.add(IOUtils.getPath(fn));
         }
         return ret;
     }

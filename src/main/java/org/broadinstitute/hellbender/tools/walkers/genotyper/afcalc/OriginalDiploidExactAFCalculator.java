@@ -14,7 +14,7 @@ import java.util.Map;
 /**
  * Original bi-allelic ~O(N) implementation.  Kept here for posterity and reference
  */
-final class OriginalDiploidExactAFCalculator extends DiploidExactAFCalculator {
+final class OriginalDiploidExactAFCalculator extends ExactAFCalculator {
 
     @Override
     protected AFCalculationResult computeLog10PNonRef(final VariantContext vc,
@@ -41,8 +41,8 @@ final class OriginalDiploidExactAFCalculator extends DiploidExactAFCalculator {
         final Map<Allele, Double> log10pRefByAllele = Collections.singletonMap(vc.getAlternateAllele(0), log10PRef);
 
         return new AFCalculationResult(new int[]{mleK}, vc.getAlleles(),
-                MathUtils.normalizeFromLog10(log10Likelihoods, true),
-                MathUtils.normalizeFromLog10(log10Priors, true),
+                MathUtils.normalizeLog10(log10Likelihoods),
+                MathUtils.normalizeLog10(log10Priors),
                 log10pRefByAllele);
     }
 
@@ -87,7 +87,7 @@ final class OriginalDiploidExactAFCalculator extends DiploidExactAFCalculator {
                                                       final double[] log10AlleleFrequencyPriors,
                                                       final double[] log10AlleleFrequencyLikelihoods,
                                                       final double[] log10AlleleFrequencyPosteriors) {
-        final List<double[]> genotypeLikelihoods = getGLs(vc.getGenotypes(), true);
+        final List<double[]> genotypeLikelihoods = getGLs(vc.getGenotypes(), true, vc.hasAllele(Allele.NON_REF_ALLELE));
         final int numSamples = genotypeLikelihoods.size()-1;
         final int numChr = 2*numSamples;
 

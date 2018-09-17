@@ -2,6 +2,8 @@ package org.broadinstitute.hellbender.utils.recalibration.covariates;
 
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
+import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.recalibration.RecalUtils;
 import org.broadinstitute.hellbender.utils.recalibration.RecalibrationArgumentCollection;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
@@ -28,8 +30,8 @@ public final class ReadGroupCovariate implements Covariate {
     private final Map<Integer, String> readGroupReverseLookupTable;
 
     public ReadGroupCovariate(final RecalibrationArgumentCollection RAC, final List<String> readGroups){
-        final Map<String, Integer> rgLookupTable = new HashMap<>();
-        final Map<Integer, String> rgReverseLookupTable = new HashMap<>();
+        final Map<String, Integer> rgLookupTable = new LinkedHashMap<>();
+        final Map<Integer, String> rgReverseLookupTable = new LinkedHashMap<>();
 
         readGroups.forEach(
                 readGroupId -> {
@@ -66,9 +68,7 @@ public final class ReadGroupCovariate implements Covariate {
 
     @Override
     public String formatKey(final int key) {
-        if ( ! readGroupReverseLookupTable.containsKey(key) ) {
-            throw new IllegalStateException("missing key " + key);
-        }
+        Utils.validate(readGroupReverseLookupTable.containsKey(key), () -> "missing key " + key);
         return readGroupReverseLookupTable.get(key);
     }
 
@@ -78,9 +78,7 @@ public final class ReadGroupCovariate implements Covariate {
     }
 
     private int keyForReadGroup(final String readGroupId) {
-        if ( ! readGroupLookupTable.containsKey(readGroupId) ) {
-            throw new IllegalStateException("missing readgroup " + readGroupId);
-        }
+        Utils.validate(readGroupLookupTable.containsKey(readGroupId), () -> "The covariates table is missing " + RecalUtils.READGROUP_COLUMN_NAME + " " + readGroupId + " in " + RecalUtils.READGROUP_REPORT_TABLE_TITLE);
         return readGroupLookupTable.get(readGroupId);
     }
 

@@ -3,10 +3,12 @@ package org.broadinstitute.hellbender.utils.read;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import org.broadinstitute.gatk.nativebindings.smithwaterman.SWOverhangStrategy;
+import org.broadinstitute.gatk.nativebindings.smithwaterman.SWParameters;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.smithwaterman.SWPairwiseAlignment.Parameters;
-import org.broadinstitute.hellbender.utils.smithwaterman.SWPairwiseAlignment;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAlignment;
 
 import java.util.*;
 
@@ -14,7 +16,15 @@ public final class CigarUtils {
 
     // used in the bubble state machine to apply Smith-Waterman to the bubble sequence
     // these values were chosen via optimization against the NA12878 knowledge base
-    public static final Parameters NEW_SW_PARAMETERS = new Parameters(200, -150, -260, -11);
+    public static final SWParameters NEW_SW_PARAMETERS = new SWParameters(200, -150, -260, -11);
+
+    // In Mutect2 and HaplotypeCaller reads are realigned to their *best* haplotypes, which is very different from a generic alignment.
+    // The {@code NEW_SW_PARAMETERS} penalize a substitution error more than an indel up to a length of 9 bases!
+    // Suppose, for example, that a read has a single substitution error, say C -> T, on its last base.  Those parameters
+    // would prefer to extend a deletion until the next T on the reference is found in order to avoid the substitution, which is absurd.
+    // Since these parameters are for aligning a read to the biological sequence we believe it comes from, the parameters
+    // we choose should correspond to sequencer error.  They *do not* have anything to do with the prevalence of true variation!
+    public static final SWParameters ALIGNMENT_TO_BEST_HAPLOTYPE_SW_PARAMETERS = new SWParameters(10, -15, -30, -5);
 
     private static final String SW_PAD = "NNNNNNNNNN";
 
@@ -75,16 +85,11 @@ public final class CigarUtils {
 
     /**
      * Compute the number of reference bases between the start (inclusive) and end (exclusive) cigar elements.
-     * Note: The method does NOT use CigarOperator.consumesReferenceBases, since it checks something different.
-     * The idea is you remove some elements from the beginning of the cigar string,
-     * and want to recalculate what if the new starting reference position,
-     * you want to count all the elements that indicate existing bases in the reference
-     * (everything but I and P).
+     * Reference bases are counted as the number of positions w.r.t. the reference spanned by an alignment to that reference.
      * For example original position = 10. cigar: 2M3I2D1M. If you remove the 2M the new starting position is 12.
      * If you remove the 2M3I it is still 12. If you remove 2M3I2D (not reasonable cigar), you will get position 14.
      */
-    @SuppressWarnings("fallthru")
-    public static int countRefBasesBasedOnCigar(final GATKRead read, final int cigarStartIndex, final int cigarEndIndex){
+    public static int countRefBasesBasedOnUnclippedAlignment(final GATKRead read, final int cigarStartIndex, final int cigarEndIndex){
         if (read == null){
             throw new IllegalArgumentException("null read");
         }
@@ -95,21 +100,26 @@ public final class CigarUtils {
         int result = 0;
         for(int i = cigarStartIndex; i < cigarEndIndex; i++){
             final CigarElement cigarElement = elems.get(i);
-            switch (cigarElement.getOperator()) {
-                case M:
-                case D:
-                case N:
-                case EQ:
-                case X:
-                case S:
-                case H:
-                    result += cigarElement.getLength();
-                    break;
-                case I:
-                case P:        //for these two, nothing happens.
-                    break;
-                default:
-                    throw new GATKException("Unsupported cigar operator: " + cigarElement.getOperator());
+            final CigarOperator operator = cigarElement.getOperator();
+            if (operator.consumesReferenceBases() || operator.isClipping()) {
+                result += cigarElement.getLength();
+            }
+        }
+        return result;
+    }
+
+    public static int countRefBasesIncludingSoftClips(final GATKRead read, final int cigarStartIndex, final int cigarEndIndex){
+        Utils.nonNull(read, "null read");
+        final List<CigarElement> elems = read.getCigarElements();
+        if (cigarStartIndex < 0 || cigarEndIndex > elems.size() || cigarStartIndex > cigarEndIndex){
+            throw new IllegalArgumentException("invalid index:" + 0 + " -" + elems.size());
+        }
+        int result = 0;
+        for(int i = cigarStartIndex; i < cigarEndIndex; i++){
+            final CigarElement cigarElement = elems.get(i);
+            final CigarOperator operator = cigarElement.getOperator();
+            if (operator.consumesReferenceBases() || operator == CigarOperator.S) {
+                result += cigarElement.getLength();
             }
         }
         return result;
@@ -185,7 +195,15 @@ public final class CigarUtils {
      * Returns whether the cigar has any N operators.
      */
     public static boolean containsNOperator(final Cigar cigar) {
-        return containsNOperator(Utils.nonNull(cigar).getCigarElements());
+        Utils.nonNull(cigar);
+        //Note: reach the elements directly rather that calling getCigarElements because
+        // we want to avoid allocating a new unmodifiable list view (comes up in profiling of HaplotypeCaller)
+        for (int i = 0, n = cigar.numCigarElements(); i < n; i++) {
+            if (cigar.getCigarElement(i).getOperator() == CigarOperator.N){
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -257,15 +275,16 @@ public final class CigarUtils {
     /**
      * Calculate the cigar elements for this path against the reference sequence
      *
+     * @param aligner
      * @param refSeq the reference sequence that all of the bases in this path should align to
      * @return a Cigar mapping this path to refSeq, or null if no reasonable alignment could be found
      */
-    public static Cigar calculateCigar(final byte[] refSeq, final byte[] altSeq) {
+    public static Cigar calculateCigar(final byte[] refSeq, final byte[] altSeq, final SmithWatermanAligner aligner) {
         Utils.nonNull(refSeq, "refSeq");
         Utils.nonNull(altSeq, "altSeq");
         if ( altSeq.length == 0 ) {
             // horrible edge case from the unit tests, where this path has no bases
-            return new Cigar(Arrays.asList(new CigarElement(refSeq.length, CigarOperator.D)));
+            return new Cigar(Collections.singletonList(new CigarElement(refSeq.length, CigarOperator.D)));
         }
 
         //Note: this is a performance optimization.
@@ -280,7 +299,7 @@ public final class CigarUtils {
 
         final String paddedRef = SW_PAD + new String(refSeq) + SW_PAD;
         final String paddedPath = SW_PAD + new String(altSeq) + SW_PAD;
-        final SWPairwiseAlignment alignment = new SWPairwiseAlignment( paddedRef.getBytes(), paddedPath.getBytes(), NEW_SW_PARAMETERS);
+        final SmithWatermanAlignment alignment = aligner.align(paddedRef.getBytes(), paddedPath.getBytes(), NEW_SW_PARAMETERS, SWOverhangStrategy.SOFTCLIP);
 
         if ( isSWFailure(alignment) ) {
             return null;
@@ -303,9 +322,9 @@ public final class CigarUtils {
     /**
      * Make sure that the SW didn't fail in some terrible way, and throw exception if it did
      */
-    private static boolean isSWFailure(final SWPairwiseAlignment alignment) {
+    private static boolean isSWFailure(final SmithWatermanAlignment alignment) {
         // check that the alignment starts at the first base, which it should given the padding
-        if ( alignment.getAlignmentStart2wrt1() > 0 ) {
+        if ( alignment.getAlignmentOffset() > 0 ) {
             return true;
         }
 
@@ -356,8 +375,126 @@ public final class CigarUtils {
         }
 
         final Cigar result = AlignmentUtils.consolidateCigar(cigarToReturn);
-        if( result.getReferenceLength() != cigar.getReferenceLength() )
-            throw new IllegalStateException("leftAlignCigarSequentially failed to produce a valid CIGAR.  Reference lengths differ.  Initial cigar " + cigar + " left aligned into " + result);
+        Utils.validate(result.getReferenceLength() == cigar.getReferenceLength(),
+                () -> "leftAlignCigarSequentially failed to produce a valid CIGAR.  Reference lengths differ.  Initial cigar " + cigar + " left aligned into " + result);
         return result;
+    }
+
+    /**
+     * Returns the length of the original read considering all clippings based on this cigar.
+     * <p>
+     *     The result of applying this method on a empty cigar is zero.
+     * </p>
+     * @param cigar the input cigar.
+     * @throws IllegalArgumentException if the input {@code cigar} is {@code null}.
+     * @return 0 or greater.
+     */
+    public static int countUnclippedReadBases(final Cigar cigar) {
+        Utils.nonNull(cigar, "the input cigar cannot be null");
+        return cigar.getCigarElements().stream()
+                .filter(ce -> {
+                    final CigarOperator operator = ce.getOperator();
+                    return operator.isClipping() || operator.consumesReadBases();
+                })
+                .mapToInt(CigarElement::getLength)
+                .sum();
+    }
+
+    /**
+     * Total number of bases clipped on the left/head side of the cigar.
+     *
+     * @param cigar the input cigar.
+     * @throws IllegalArgumentException if {@code cigar} is {@code null}.
+     * @return 0 or greater.
+     */
+    public static int countLeftClippedBases(final Cigar cigar) {
+        Utils.nonNull(cigar, "the input cigar cannot not be null");
+        if (cigar.numCigarElements() < 2) {
+            return 0;
+        } else {
+            int result = 0;
+            for (final CigarElement e : cigar) {
+                if (!e.getOperator().isClipping()) {
+                    return result;
+                }
+                result += e.getLength();
+            }
+            throw new IllegalArgumentException("the input cigar only contains clips!");
+        }
+    }
+
+    /**
+     * Returns the number of based hard-clipped to the left/head of the cigar.
+     *
+     * @param cigar the input cigar.
+     * @throws IllegalArgumentException if {@code cigar} is {@code null}.
+     * @return 0 or greater.
+     */
+    public static int countLeftHardClippedBases(final Cigar cigar) {
+        Utils.nonNull(cigar, "the input cigar cannot not be null");
+        if (cigar.numCigarElements() < 2) {
+            return 0;
+        } else if (cigar.getCigarElement(0).getOperator() != CigarOperator.H) {
+            return 0;
+        } else {
+            return cigar.getCigarElement(0).getLength();
+        }
+    }
+
+    /**
+     * Returns the number of based hard-clipped to the right/tail of the cigar.
+     *
+     * @param cigar the input cigar.
+     * @throws IllegalArgumentException if {@code cigar} is {@code null}.
+     * @return 0 or greater.
+     */
+    public static int countRightHardClippedBases(final Cigar cigar) {
+        Utils.nonNull(cigar, "the input cigar cannot not be null");
+        if (cigar.numCigarElements() < 2) {
+            return 0;
+        } else {
+            final List<CigarElement> elements = cigar.getCigarElements();
+            int lastElementIndex;
+            if (elements.get(lastElementIndex = elements.size() - 1).getOperator() != CigarOperator.H) {
+                return 0;
+            } else {
+                return elements.get(lastElementIndex).getLength();
+            }
+        }
+    }
+
+    /**
+     * Total number of bases clipped (soft or hard) on the right/tail side of the cigar.
+     *
+     * @param cigar the input cigar.
+     * @throws IllegalArgumentException if {@code cigar} is {@code null}
+     * @return 0 or greater.
+     */
+    public static int countRightClippedBases(final Cigar cigar) {
+        Utils.nonNull(cigar, "the input cigar cannot be null");
+        final List<CigarElement> elements = cigar.getCigarElements();
+        final int elementsCount = elements.size();
+        if (elementsCount < 2) {  // a single clipped element (that is already an "invalid" CIGAR) would be considered
+            return 0;        // a left-clip so it must have at least two elements before right clipping can be larger than 0.
+        } else {
+            int result = 0;
+            int i;
+            for (i = elementsCount - 1; i >= 0; --i) {
+                final CigarElement ce = elements.get(i);
+                if (!ce.getOperator().isClipping()) {
+                    return result;
+                } else {
+                    result += ce.getLength();
+                }
+            }
+            throw new IllegalArgumentException("the input cigar only have clipping operations");
+        }
+    }
+
+    public static int countAlignedBases(final Cigar cigar ) {
+        return Utils.nonNull(cigar).getCigarElements().stream()
+                .filter(cigarElement -> cigarElement.getOperator().isAlignment())
+                .mapToInt(CigarElement::getLength)
+                .sum();
     }
 }

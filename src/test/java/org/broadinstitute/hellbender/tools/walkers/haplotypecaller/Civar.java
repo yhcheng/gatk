@@ -3,6 +3,8 @@ package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import java.util.*;
 
@@ -79,7 +81,7 @@ public final class Civar {
         if (allElementsAreOptional()) {
             return this;
         }
-        final Element[] newElements = new Element[this.elements.size()];
+        final Element[] newElements = new Element[elements.size()];
         int next = 0;
         for (final Element e : elements) {
            final Element newElement = e.clone();
@@ -146,10 +148,8 @@ public final class Civar {
         int sc = starCount();
         if (mtss > 0) {
             if (sc > 0) {
-                final Civar newEmbedded = new Civar(Collections.unmodifiableList(Arrays.asList(
+                return new Civar(Collections.unmodifiableList(Arrays.asList(
                         new Element(Operator.MATCH, mtss, false, false), new Element(Operator.MATCH, sc, true, false))));
-                //newEmbedded.string = newEmbedded.elements.get(0).toString() + newEmbedded.elements.get(1).toString();
-                return newEmbedded;
             } else {
                 return new Civar(Collections.unmodifiableList(Collections.singletonList(new Element(Operator.MATCH, mtss, false, false))));
             }
@@ -168,14 +168,11 @@ public final class Civar {
         if (!isUnrolled())
             throw new UnsupportedOperationException("you cannot apply an unrolled Civar to a DNA sequence");
         final List<ElementOffset> result = new ArrayList<>(elements().size());
-        final CharSequence sequence = seq;
 
-        int sequenceLength = sequence.length();
+        int sequenceLength = seq.length();
         int minSeqLen = minimumTemplateSequenceSize();
-        if (!expands() && sequenceLength != minSeqLen)
-            throw new IllegalArgumentException("the sequence provided does not match this Civar size " + sequence.length() + " != " + minSeqLen);
-        if (sequenceLength < minSeqLen)
-            throw new IllegalArgumentException("the sequence provided is too small for this Civar " + sequence.length() + " < " + minSeqLen);
+        Utils.validateArg(expands() || sequenceLength == minSeqLen, () -> "the sequence provided does not match this Civar size " + seq.length() + " != " + minSeqLen);
+        Utils.validateArg(sequenceLength >= minSeqLen, () -> "the sequence provided is too small for this Civar " + seq.length() + " < " + minSeqLen);
         int starCount = starCount();
         int paddingTotal = sequenceLength - minSeqLen;
         int starPadding = starCount == 0 ? 0 : paddingTotal / starCount;
@@ -230,10 +227,8 @@ public final class Civar {
 
         int referenceLength = sequence.length();
         int minSeqLen = minimumTemplateSequenceSize();
-        if (!expands() && referenceLength != minSeqLen)
-            throw new IllegalArgumentException("the sequence provided does not match this Civar size " + sequence.length() + " != " + minSeqLen);
-        if (referenceLength < minSeqLen)
-            throw new IllegalArgumentException("the sequence provided is too small for this Civar " + sequence.length() + " < " + minSeqLen);
+        Utils.validateArg(expands() || referenceLength == minSeqLen, () -> "the sequence provided does not match this Civar size " + sequence.length() + " != " + minSeqLen);
+        Utils.validateArg(referenceLength >= minSeqLen, () -> "the sequence provided is too small for this Civar " + sequence.length() + " < " + minSeqLen);
         int starCount = starCount();
         int paddingTotal = referenceLength - minSeqLen;
         int starPadding = starCount == 0 ? 0 : paddingTotal / starCount;
@@ -241,7 +236,7 @@ public final class Civar {
         int nextInSeq = 0;
         int nextElement = 0;
 
-        final StringBuffer sb = new StringBuffer(sequence.length() * 2);
+        final StringBuilder sb = new StringBuilder(sequence.length() * 2);
         while (nextInSeq < to && nextElement < elements.size()) {
             final Element e = elements.get(nextElement++);
             int size = e.expands() ? starPadding * e.size() : e.size();
@@ -334,26 +329,26 @@ public final class Civar {
 
     }
 
-    private void transition(final CharSequence charSequence, final int from, final StringBuffer dest, final int length) {
+    private void transition(final CharSequence charSequence, final int from, final StringBuilder dest, final int length) {
         for (int i = from; i < length + from; i++) {
             dest.append(transition(charSequence.charAt(i)));
         }
     }
 
-    private void transversion(final CharSequence cs, final int from, final StringBuffer dest, final int length) {
+    private void transversion(final CharSequence cs, final int from, final StringBuilder dest, final int length) {
         for (int i = from; i < length + from; i++) {
             dest.append(transversion(cs.charAt(i)));
         }
     }
 
-    private void complement(final CharSequence cs, final int from, final StringBuffer dest, final int length) {
+    private void complement(final CharSequence cs, final int from, final StringBuilder dest, final int length) {
         for (int i = from; i < length + from; i++) {
             dest.append(complement(cs.charAt(i)));
         }
     }
 
     private static List<Element> cle(final List<Element> original) {
-        if (original.size() == 0)
+        if (original.isEmpty())
             return original;
         if (original.size() == 1) {
             final Element e = original.get(0);
@@ -413,9 +408,9 @@ public final class Civar {
         boolean hasOptionalElements = false;
         boolean allElementsAreOptional = true;
         boolean hasVariation = false;
-        StringBuffer strBuffer = new StringBuffer(100);
+        StringBuilder strBuilder = new StringBuilder(100);
         for (final Element e : elements) {
-            strBuffer.append(e.toString());
+            strBuilder.append(e.toString());
             if (e.operator() == Operator.EMBEDDED) {
                 hasEmbeddedCivars = true;
                 if (e.embedded.hasVariation()) {
@@ -444,10 +439,10 @@ public final class Civar {
                 minimumTemplateSize += e.size();
             }
         }
-        this.string = strBuffer.toString();
+        string = strBuilder.toString();
         this.hasVariation = hasVariation;
-        this.allVariationIsOptional = allElementsAreOptional;
-        this.hasOptionalVariation = hasOptionalElements;
+        allVariationIsOptional = allElementsAreOptional;
+        hasOptionalVariation = hasOptionalElements;
         this.hasEmbeddedCivars = hasEmbeddedCivars;
         this.starCount = starCount;
         this.expands = expands;
@@ -600,7 +595,7 @@ public final class Civar {
             if (!expands)
                 return size;
             else
-                return size * (starPadding) + Math.min(excessPaddingRemaining, size);
+                return size * starPadding + Math.min(excessPaddingRemaining, size);
         }
 
         /**
@@ -650,11 +645,8 @@ public final class Civar {
         }
 
         protected Element(final Operator o, final int size, final boolean expands, final boolean optional) {
-            if (o == null)
-                throw new IllegalArgumentException("operator cannot be null");
-            if (size < 0)
-                throw new IllegalArgumentException("element size cannot be negative");
-            this.o = o;
+            ParamUtils.isPositiveOrZero(size, "element size cannot be negative");
+            this.o = Utils.nonNull(o, "operator cannot be null");;
             this.optional = optional;
             this.expands = expands;
             this.size = size;
@@ -670,10 +662,8 @@ public final class Civar {
          */
         public Element(final Operator o, final int size, final boolean expands, final boolean optional, final String xmer) {
             this(o,size,expands,optional);
-            if ((xmer == null || xmer.length() == 0) && o.requiresXmer())
-                throw new IllegalArgumentException("operator  " + o + " requires a x-mer");
-            if ((xmer != null && !o.acceptsXmer()))
-                throw new IllegalArgumentException("operator  " + o + " does not accept a x-mer");
+            Utils.validateArg(!o.requiresXmer() || (xmer != null && xmer.length() > 0), () -> "operator  " + o + " requires a x-mer");
+            Utils.validateArg(o.acceptsXmer() || xmer == null, () -> "operator  " + o + " does not accept a x-mer");
             this.xmer = xmer;
         }
 
@@ -681,7 +671,7 @@ public final class Civar {
             if (operator() == Operator.EMBEDDED) {
                 return "(" + embedded.toString() + ")";
             }
-            final String sizeString = expands ? (size == 1 ? "*":"" + size) : ("" + size);
+            final String sizeString = expands ? (size == 1 ? "*":String.valueOf(size)) : (String.valueOf(size));
             final String sizeAndOperator = sizeString + operator().charValue;
             final String sizeAndOperatorAndXmer = o == Operator.INSERTION ? sizeAndOperator + xmer : sizeAndOperator;
             return optional ? sizeAndOperatorAndXmer + "?" : sizeAndOperatorAndXmer;
@@ -728,7 +718,7 @@ public final class Civar {
         }
 
         public Element mandatoryEquivalent() {
-            final Element result = this.clone();
+            final Element result = clone();
             result.optional = false;
             return result;
         }
@@ -741,22 +731,14 @@ public final class Civar {
     protected static class Parser {
 
         public static Civar parse(final CharSequence cs, final int from, final int to) {
-            if (cs == null)
-                throw new IllegalArgumentException("the input char-sequence cannot be null");
-            if (from < 0)
-                throw new IndexOutOfBoundsException("the from index cannot be negative");
-            if (to < from)
-                throw new IllegalArgumentException("the to index cannot less than the from index");
-            if (to > cs.length())
-                throw new IllegalArgumentException("the to index cannot be greater than the end of the sequence");
-            if (cs == null)
-                throw new IllegalArgumentException("cs cannot be null");
-
+            Utils.nonNull(cs, "the input char-sequence cannot be null");
+            ParamUtils.isPositiveOrZero(from, "the from index cannot be negative");
+            ParamUtils.inRange(to, from, cs.length(), "the to index cannot less than the from index or greater than the end of the sequence");
             final String s = cs.subSequence(from, to).toString();
             final LinkedList<Token> tokens = tokenize(s, 0, s.length());
             final LinkedList<Element> elements = elementize(tokens, s);
             final Civar result;
-            if (elements.size() == 0) {
+            if (elements.isEmpty()) {
                 result = new Civar(Collections.emptyList());
             } else if (elements.size() == 1) {
                 result = new Civar(Collections.singletonList(elements.getFirst()));
@@ -837,16 +819,13 @@ public final class Civar {
         }
 
         private static Element popOperation(final Stack<Token> stack, final String xmer, final CharSequence cs) {
-            if (stack.isEmpty()) {
-                throw new IllegalArgumentException("Invalid Civar string: " + cs);
-            }
+            Utils.validateArg(!stack.isEmpty(), () -> "Invalid Civar string: " + cs);
             Token operator = stack.pop();
             if (operator.type == TokenType.ELEMENT) {
                 return operator.asElement();
             }
-            if (operator.type != TokenType.OPERATOR) {
-                throw new IllegalArgumentException("Invalid Civar string:" + operator.type +  " " + cs);
-            }
+            Utils.validateArg(operator.type == TokenType.OPERATOR, () -> "Invalid Civar string:" + operator.type +  " " + cs);
+
             if (stack.isEmpty()) {
                 return new Element(operator.asOperator(), 1, false, false, xmer);
             } else {
@@ -916,8 +895,7 @@ public final class Civar {
 
 
         public Civar parse(final CharSequence cs) {
-            if (cs == null)
-                throw new IllegalArgumentException("cs cannot be null");
+            Utils.nonNull(cs, "cs cannot be null");
             return parse(cs, 0, cs.length());
         }
 
@@ -931,10 +909,8 @@ public final class Civar {
     public Cigar toCigar(final int templateLength) {
 
         int minSeqLen = minimumTemplateSequenceSize();
-        if (!expands() && templateLength != minSeqLen)
-            throw new IllegalArgumentException("the sequence provided does not match this Civar size " + templateLength + " != " + minSeqLen);
-        if (templateLength < minSeqLen)
-            throw new IllegalArgumentException("the sequence provided is too small for this Civar " + templateLength + " < " + minSeqLen);
+        Utils.validateArg(expands() || templateLength == minSeqLen, "the sequence provided does not match this Civar size " + templateLength + " != " + minSeqLen);
+        Utils.validateArg(templateLength >= minSeqLen, "the sequence provided is too small for this Civar " + templateLength + " < " + minSeqLen);
         int starCount = starCount();
         int paddingTotal = templateLength - minSeqLen;
         int starPadding = starCount == 0 ? 0 : paddingTotal / starCount;
@@ -943,7 +919,7 @@ public final class Civar {
        // We first get the equivalent cigar elements for the elements in the Civar.
        final List<CigarElement> cigarElements = new LinkedList<>();
 
-       for (final Element e : this.elements()) {
+       for (final Element e : elements()) {
             final int size = e.size(starPadding,excessPadding);
             excessPadding -= e.excessPaddingUsed(excessPadding);
 
@@ -1002,7 +978,7 @@ public final class Civar {
         }
 
         public String toString() {
-            switch (this.type) {
+            switch (type) {
                 case STAR: return "*";
                 case OPEN_BRACKET: return "(";
                 case CLOSE_BRACKET: return ")";
@@ -1025,7 +1001,7 @@ public final class Civar {
         }
 
         public Element asElement() {
-            return ((Element) content);
+            return (Element) content;
         }
 
         protected static Token xmer(final CharSequence cs) {

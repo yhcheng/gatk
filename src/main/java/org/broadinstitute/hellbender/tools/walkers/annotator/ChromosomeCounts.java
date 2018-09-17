@@ -1,13 +1,16 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextUtils;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
 import htsjdk.variant.vcf.VCFStandardHeaderLines;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
 
 import java.util.*;
 
@@ -28,6 +31,7 @@ import java.util.*;
  * The total number of alleles in the genotype should be equivalent to the ploidy of the sample.</p>
  *
  */
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Counts and frequency of alleles in called genotypes (AC, AF, AN)")
 public final class ChromosomeCounts extends InfoFieldAnnotation implements StandardAnnotation {
 
     public static final String[] keyNames = {
@@ -41,20 +45,23 @@ public final class ChromosomeCounts extends InfoFieldAnnotation implements Stand
             VCFStandardHeaderLines.getInfoLine(VCFConstants.ALLELE_NUMBER_KEY) };
 
 
+    @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final Map<String, PerReadAlleleLikelihoodMap> perReadAlleleLikelihoodMap) {
+                                        ReadLikelihoods<Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( ! vc.hasGenotypes() ) {
-            return null;
+            return Collections.emptyMap();
         }
 
-        return VariantContextUtils.calculateChromosomeCounts(vc, new HashMap<>(), true, Collections.emptySet());
+        return VariantContextUtils.calculateChromosomeCounts(vc, new LinkedHashMap<>(), true, Collections.emptySet());
     }
 
+    @Override
     public List<String> getKeyNames() {
         return Arrays.asList(keyNames);
     }
 
+    @Override
     public List<VCFInfoHeaderLine> getDescriptions() { return Arrays.asList(descriptions); }
 }

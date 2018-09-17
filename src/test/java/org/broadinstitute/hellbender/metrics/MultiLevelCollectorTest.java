@@ -12,6 +12,7 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.Serializable;
 import java.util.*;
 
 import static htsjdk.samtools.util.CollectionUtil.makeSet;
@@ -43,13 +44,16 @@ public final class MultiLevelCollectorTest {
     /** We will just Tally up the number of times records were added to this metric and change FINISHED
      * to true when FINISHED is called
      */
-    class TotalNumberMetric extends MultiLevelMetrics {
+    class TotalNumberMetric extends MultiLevelMetrics implements Serializable {
+        private static final long serialVersionUID = 1L;
+
         /** The number of these encountered **/
         public Integer TALLY = 0;
         public boolean FINISHED = false;
     }
 
     class RecordCountMultiLevelCollector extends MultiLevelCollector<TotalNumberMetric, Integer, TestArg> {
+        private static final long serialVersionUID = 1L;
 
         public RecordCountMultiLevelCollector(final Set<MetricAccumulationLevel> accumulationLevels, final List<SAMReadGroupRecord> samRgRecords) {
             setup(accumulationLevels, samRgRecords);
@@ -64,7 +68,7 @@ public final class MultiLevelCollectorTest {
             return numProcessed;
         }
 
-        private final Map<String, TotalNumberMetric> unitsToMetrics = new HashMap<>();
+        private final Map<String, TotalNumberMetric> unitsToMetrics = new LinkedHashMap<>();
 
         public Map<String, TotalNumberMetric> getUnitsToMetrics() {
             return unitsToMetrics;
@@ -81,6 +85,7 @@ public final class MultiLevelCollectorTest {
         }
 
         private class RecordCountPerUnitCollector implements PerUnitMetricCollector<TotalNumberMetric, Integer, TestArg>{
+            private static final long serialVersionUID = 1L;
             private final TotalNumberMetric metric;
 
             public RecordCountPerUnitCollector(final String sample, final String library, final String readGroup) {
@@ -119,25 +124,25 @@ public final class MultiLevelCollectorTest {
         }
     }
 
-    public static final Map<MetricAccumulationLevel, Map<String, Integer>> accumulationLevelToPerUnitReads = new HashMap<>();
+    public static final Map<MetricAccumulationLevel, Map<String, Integer>> accumulationLevelToPerUnitReads = new LinkedHashMap<>();
     static {
-        HashMap<String, Integer> curMap = new HashMap<>();
+        HashMap<String, Integer> curMap = new LinkedHashMap<>();
         curMap.put("__", 19);
         accumulationLevelToPerUnitReads.put(MetricAccumulationLevel.ALL_READS, curMap);
 
-        curMap = new HashMap<>();
+        curMap = new LinkedHashMap<>();
         curMap.put("Ma__", 10);
         curMap.put("Pa__", 9);
         accumulationLevelToPerUnitReads.put(MetricAccumulationLevel.SAMPLE, curMap);
 
-        curMap = new HashMap<>();
+        curMap = new LinkedHashMap<>();
         curMap.put("Ma_whatever_", 10);
         curMap.put("Pa_lib1_",     4);
         curMap.put("Pa_lib2_",     5);
         accumulationLevelToPerUnitReads.put(MetricAccumulationLevel.LIBRARY, curMap);
 
 
-        curMap = new HashMap<>();
+        curMap = new LinkedHashMap<>();
         curMap.put("Ma_whatever_me",     10);
         curMap.put("Pa_lib1_myself", 4);
         curMap.put("Pa_lib2_i",      3);

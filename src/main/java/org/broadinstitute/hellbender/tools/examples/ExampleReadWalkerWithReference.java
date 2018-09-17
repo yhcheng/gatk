@@ -1,9 +1,9 @@
 package org.broadinstitute.hellbender.tools.examples;
 
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import org.broadinstitute.hellbender.cmdline.programgroups.ExampleProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
@@ -21,7 +21,8 @@ import java.io.PrintStream;
 @CommandLineProgramProperties(
         summary = "Prints reads from the provided file(s) with corresponding reference bases (if a reference is provided) to the specified output file (or STDOUT if none specified)",
         oneLineSummary = "Print reads with reference context",
-        programGroup = ReadProgramGroup.class
+        programGroup = ExampleProgramGroup.class,
+        omitFromCommandLine = true
 )
 public final class ExampleReadWalkerWithReference extends ReadWalker {
 
@@ -29,11 +30,6 @@ public final class ExampleReadWalkerWithReference extends ReadWalker {
     private File OUTPUT_FILE = null;
 
     private PrintStream outputStream = null;
-
-    @Override
-    public boolean requiresReference(){
-        return true;
-    }
 
     @Override
     public void onTraversalStart() {
@@ -54,10 +50,9 @@ public final class ExampleReadWalkerWithReference extends ReadWalker {
     }
 
     @Override
-    public Object onTraversalSuccess() {
-        if ( outputStream != null )
+    public void closeTool() {
+        if ( outputStream != null ) {
             outputStream.close();
-
-        return null;
+        }
     }
 }

@@ -8,16 +8,17 @@ import htsjdk.samtools.util.Histogram;
 import htsjdk.samtools.util.StringUtil;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.BetaFeature;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.cmdline.programgroups.SparkProgramGroup;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 import org.broadinstitute.hellbender.engine.filters.MetricsReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.metrics.MetricsUtils;
-import org.broadinstitute.hellbender.tools.picard.analysis.MeanQualityByCycle;
 import org.broadinstitute.hellbender.utils.R.RScriptExecutor;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.io.Resource;
@@ -27,6 +28,7 @@ import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import java.io.File;
 import java.io.Serializable;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -36,13 +38,15 @@ import java.util.List;
  *
  * This is the Spark implementation of this tool.
  */
+@DocumentedFeature
 @CommandLineProgramProperties(
 summary = "Program to generate a data table and pdf chart of " +
         "mean base quality by cycle from a SAM/BAM file.  Works best on a single lane/run of data, but can be applied to " +
         "merged BAMs. Uses R to generate chart output.",
         oneLineSummary = "MeanQualityByCycle on Spark",
-        programGroup = SparkProgramGroup.class
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
+@BetaFeature
 public final class MeanQualityByCycleSpark extends GATKSparkTool {
 
     private static final long serialVersionUID = 1l;
@@ -62,8 +66,8 @@ public final class MeanQualityByCycleSpark extends GATKSparkTool {
     public boolean pfReadsOnly = false;
 
     @Override
-    public ReadFilter makeReadFilter() {
-        return ReadFilterLibrary.ALLOW_ALL_READS;
+    public List<ReadFilter> getDefaultReadFilters() {
+        return Collections.singletonList(ReadFilterLibrary.ALLOW_ALL_READS);
     }
 
     @VisibleForTesting
@@ -122,9 +126,9 @@ public final class MeanQualityByCycleSpark extends GATKSparkTool {
          */
         public HistogramGenerator merge(final HistogramGenerator hg2) {
             Utils.nonNull(hg2);
-            if (this.useOriginalQualities != hg2.useOriginalQualities){
-                throw new IllegalArgumentException("unequal useOriginalQualities. This has " + this.useOriginalQualities);
-            }
+            Utils.validateArg(this.useOriginalQualities == hg2.useOriginalQualities,
+                    () -> "unequal useOriginalQualities. This has " + this.useOriginalQualities);
+
             ensureArraysBigEnough(hg2.maxLengthSoFar);
             for (int i = 0; i < hg2.firstReadTotalsByCycle.length; i++) {
                this.firstReadTotalsByCycle[i] += hg2.firstReadTotalsByCycle[i];
@@ -220,7 +224,7 @@ public final class MeanQualityByCycleSpark extends GATKSparkTool {
     }
 
     private void saveResults(final MetricsFile<?, Integer> metrics, final SAMFileHeader readsHeader, final String inputFileName){
-        MetricsUtils.saveMetrics(metrics, out, getAuthHolder());
+        MetricsUtils.saveMetrics(metrics, out);
 
         if (metrics.getAllHistograms().isEmpty()) {
             logger.warn("No valid bases found in input file.");
@@ -239,9 +243,19 @@ public final class MeanQualityByCycleSpark extends GATKSparkTool {
                 plotSubtitle = StringUtil.asEmptyIfNull(readGroups.get(0).getLibrary());
             }
             final RScriptExecutor executor = new RScriptExecutor();
-            executor.addScript(new Resource(MeanQualityByCycle.R_SCRIPT, MeanQualityByCycle.class));
+            executor.addScript(getMeanQualityByCycleRScriptResource());
             executor.addArgs(out, chartOutput.getAbsolutePath(), inputFileName, plotSubtitle);
             executor.exec();
         }
     }
+
+    /**
+     * Return the R Script resource used by this class
+     */
+    @VisibleForTesting
+    static Resource getMeanQualityByCycleRScriptResource() {
+        final String R_SCRIPT = "meanQualityByCycle.R";
+        return new Resource(R_SCRIPT, MeanQualityByCycleSpark.class);
+    }
+
 }

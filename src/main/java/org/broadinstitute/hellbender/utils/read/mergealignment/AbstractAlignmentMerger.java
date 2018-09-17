@@ -9,6 +9,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.runtime.ProgressLogger;
 
@@ -69,10 +70,12 @@ public abstract class AbstractAlignmentMerger {
     private boolean addMateCigar = false;
 
     private final SamRecordFilter alignmentFilter = new SamRecordFilter() {
+        @Override
         public boolean filterOut(final SAMRecord record) {
             return ignoreAlignment(record);
         }
 
+        @Override
         public boolean filterOut(final SAMRecord first, final SAMRecord second) {
             throw new UnsupportedOperationException("Paired SamRecordFilter not implemented!");
         }
@@ -346,9 +349,7 @@ public abstract class AbstractAlignmentMerger {
             }
         }
         unmappedIterator.close();
-        if (alignedIterator.hasNext()) {
-            throw new IllegalStateException("Reads remaining on alignment iterator: " + alignedIterator.next().getReadName() + "!");
-        }
+        Utils.validate(!alignedIterator.hasNext(), () -> "Reads remaining on alignment iterator: " + alignedIterator.next().getReadName() + "!");
         alignedIterator.close();
 
         // Write the records to the output file in specified sorted order,
@@ -384,7 +385,7 @@ public abstract class AbstractAlignmentMerger {
      * Add record if it is primary or optionally secondary.
      */
     private void addIfNotFiltered(final SortingCollection<SAMRecord> sorted, final SAMRecord rec) {
-        if (includeSecondaryAlignments || !rec.getNotPrimaryAlignmentFlag()) {
+        if (includeSecondaryAlignments || !rec.isSecondaryAlignment()) {
             sorted.add(rec);
             this.progress.record(rec);
         }
@@ -495,7 +496,7 @@ public abstract class AbstractAlignmentMerger {
 
         rec.setAlignmentStart(alignment.getAlignmentStart());
         rec.setReadNegativeStrandFlag(alignment.getReadNegativeStrandFlag());
-        rec.setNotPrimaryAlignmentFlag(alignment.getNotPrimaryAlignmentFlag());
+        rec.setSecondaryAlignment(alignment.isSecondaryAlignment());
         rec.setSupplementaryAlignmentFlag(alignment.getSupplementaryAlignmentFlag());
         if (!alignment.getReadUnmappedFlag()) {
             // only aligned reads should have cigar and mapping quality set
@@ -511,7 +512,7 @@ public abstract class AbstractAlignmentMerger {
         // If it's on the negative strand, reverse complement the bases
         // and reverse the order of the qualities
         if (rec.getReadNegativeStrandFlag()) {
-            SAMRecordUtil.reverseComplement(rec);
+            rec.reverseComplement(true);
         }
 
     }
@@ -530,7 +531,7 @@ public abstract class AbstractAlignmentMerger {
                 // 1-based index of first base in read to clip.
                 int clipFrom = readLength - overhang + 1;
                 // we have to check if the last element is soft-clipping, so we can subtract that from clipFrom
-                final CigarElement cigarElement = oldCigar.getCigarElement(oldCigar.getCigarElements().size()-1);
+                final CigarElement cigarElement = oldCigar.getCigarElement(oldCigar.numCigarElements()-1);
                 if (CigarOperator.SOFT_CLIP == cigarElement.getOperator()) clipFrom -= cigarElement.getLength();
                 final List<CigarElement> newCigarElements = CigarUtil.softClipEndOfRead(clipFrom, oldCigar.getCigarElements());
                 newCigar = new Cigar(newCigarElements);
@@ -592,14 +593,12 @@ public abstract class AbstractAlignmentMerger {
     }
 
 
-    protected SAMProgramRecord getProgramRecord() { return this.programRecord; }
+    protected SAMProgramRecord getProgramRecord() { return programRecord; }
 
     protected void setProgramRecord(final SAMProgramRecord pg) {
-        if (this.programRecord != null) {
-            throw new IllegalStateException("Cannot set program record more than once on alignment merger.");
-        }
-        this.programRecord = pg;
-        this.header.addProgramRecord(pg);
+        Utils.validate(programRecord == null, "Cannot set program record more than once on alignment merger.");
+        programRecord = pg;
+        header.addProgramRecord(pg);
         SAMUtils.chainSAMProgramRecord(header, pg);
     }
 

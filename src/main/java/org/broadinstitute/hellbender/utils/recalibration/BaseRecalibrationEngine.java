@@ -1,6 +1,6 @@
 package org.broadinstitute.hellbender.utils.recalibration;
 
-import com.google.cloud.dataflow.sdk.transforms.SerializableFunction;
+import org.broadinstitute.hellbender.utils.SerializableFunction;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.SAMFileHeader;
@@ -53,7 +53,7 @@ public final class BaseRecalibrationEngine implements Serializable {
 
         @Override
         public SimpleInterval apply( GATKRead read ) {
-            return BAQ.getReferenceWindowForRead(read, BAQ.DEFAULT_BANDWIDTH, BAQ.DEFAULT_INCLUDE_CLIPPED_BASES);
+            return BAQ.getReferenceWindowForRead(read, BAQ.DEFAULT_BANDWIDTH);
         }
     }
     public static final SerializableFunction<GATKRead, SimpleInterval> BQSR_REFERENCE_WINDOW_FUNCTION = new BQSRReferenceWindowFunction();
@@ -83,10 +83,10 @@ public final class BaseRecalibrationEngine implements Serializable {
         this.recalArgs = recalArgs;
         this.readsHeader = readsHeader;
 
-        if (recalArgs.skipBAQ) {
-            baq = null;
-        } else {
+        if (recalArgs.enableBAQ) {
             baq = new BAQ(recalArgs.BAQGOP); // setup the BAQ object with the provided gap open penalty
+        } else {
+            baq = null;
         }
 
         covariates = new StandardCovariateList(recalArgs, readsHeader);
@@ -97,7 +97,7 @@ public final class BaseRecalibrationEngine implements Serializable {
         }
         recalTables = new RecalibrationTables(covariates, numReadGroups);
         keyCache = new CovariateKeyCache();
-        cachedEventTypes = EventType.values();
+        cachedEventTypes = recalArgs.computeIndelBQSRTables ? EventType.values() : new EventType[]{EventType.BASE_SUBSTITUTION};
     }
 
     public void logCovariatesUsed() {
@@ -130,7 +130,7 @@ public final class BaseRecalibrationEngine implements Serializable {
 
         // note for efficiency reasons we don't compute the BAQ array unless we actually have
         // some error to marginalize over.  For ILMN data ~85% of reads have no error
-        final byte[] baqArray = (nErrors == 0 || recalArgs.skipBAQ) ? flatBAQArray(read) : calculateBAQArray(read, refDS);
+        final byte[] baqArray = (nErrors == 0 || !recalArgs.enableBAQ) ? flatBAQArray(read) : calculateBAQArray(read, refDS);
 
         if( baqArray != null ) { // some reads just can't be BAQ'ed
             final ReadCovariates covariates = RecalUtils.computeCovariates(read, readsHeader, this.covariates, true, keyCache);
@@ -156,10 +156,7 @@ public final class BaseRecalibrationEngine implements Serializable {
      * and walks over this data to create summary data tables like by read group table.
      */
     public void finalizeData() {
-        if ( finalized ) {
-            throw new IllegalStateException("FinalizeData() has already been called");
-        }
-
+        Utils.validate(!finalized, "FinalizeData() has already been called");
         finalizeRecalibrationTables(recalTables);
         finalized = true;
     }
@@ -226,9 +223,7 @@ public final class BaseRecalibrationEngine implements Serializable {
      * @return the finalized recalibration table collected by this engine
      */
     public RecalibrationTables getFinalRecalibrationTables() {
-        if ( ! finalized ) {
-            throw new IllegalStateException("Cannot get final recalibration tables until finalizeData() has been called");
-        }
+        Utils.validate(finalized, "Cannot get final recalibration tables until finalizeData() has been called");
         return recalTables;
     }
 
@@ -245,9 +240,7 @@ public final class BaseRecalibrationEngine implements Serializable {
      * @param recalInfo data structure holding information about the recalibration values for a single read
      */
     private void updateRecalTablesForRead( final ReadRecalibrationInfo recalInfo ) {
-        if ( finalized ) {
-            throw new IllegalStateException("FinalizeData() has already been called");
-        }
+        Utils.validate(!finalized, "FinalizeData() has already been called");
 
         final GATKRead read = recalInfo.getRead();
         final ReadCovariates readCovariates = recalInfo.getCovariatesValues();
@@ -313,10 +306,10 @@ public final class BaseRecalibrationEngine implements Serializable {
         if (recalArgs.defaultBaseQualities < 0) {
             return read;
         }
-        byte reads[] = read.getBases();
-        byte quals[] = read.getBaseQualities();
+        byte[] reads = read.getBases();
+        byte[] quals = read.getBaseQualities();
         if (quals == null || quals.length < reads.length) {
-            byte new_quals[] = new byte[reads.length];
+            byte[] new_quals = new byte[reads.length];
             Arrays.fill(new_quals, recalArgs.defaultBaseQualities);
             read.setBaseQualities(new_quals);
         }
@@ -337,8 +330,8 @@ public final class BaseRecalibrationEngine implements Serializable {
         final int readLength = read.getLength();
         final boolean[] knownSitesArray = new boolean[readLength];//initializes to all false
         final Cigar cigar = read.getCigar();
-        final int softStart = ReadUtils.getSoftStart(read);
-        final int softEnd = ReadUtils.getSoftEnd(read);
+        final int softStart = read.getSoftStart();
+        final int softEnd = read.getSoftEnd();
         for ( final Locatable knownSite : knownSites ) {
             if (knownSite.getEnd() < softStart || knownSite.getStart() > softEnd) {
                 // knownSite is outside clipping window for the read, ignore

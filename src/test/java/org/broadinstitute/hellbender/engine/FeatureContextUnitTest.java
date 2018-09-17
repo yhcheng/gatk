@@ -3,20 +3,20 @@ package org.broadinstitute.hellbender.engine;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import htsjdk.tribble.Feature;
 import htsjdk.variant.vcf.VCFHeader;
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.cmdline.programgroups.QCProgramGroup;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.cmdline.TestProgramGroup;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.Arrays;
 
-public final class FeatureContextUnitTest extends BaseTest {
+public final class FeatureContextUnitTest extends GATKBaseTest {
 
-    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup = QCProgramGroup.class)
+    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup = TestProgramGroup.class)
     private static class ArtificialFeatureContainingCommandLineProgram extends CommandLineProgram {
         @Argument(fullName = "featureArgument", shortName = "f")
         FeatureInput<Feature> featureArgument;
@@ -61,7 +61,7 @@ public final class FeatureContextUnitTest extends BaseTest {
         try (final FeatureManager featureManager = new FeatureManager(toolInstance)) {
             final FeatureContext featureContext = new FeatureContext(featureManager, new SimpleInterval("1", 1, 1));
             final Object header = featureContext.getHeader(toolInstance.featureArgument);
-            Assert.assertTrue(header instanceof VCFHeader, "Header for " + toolInstance.featureArgument.getFeatureFile().getAbsolutePath() +
+            Assert.assertTrue(header instanceof VCFHeader, "Header for " + toolInstance.featureArgument.getFeaturePath() +
                     " not a VCFHeader");
         }
     }

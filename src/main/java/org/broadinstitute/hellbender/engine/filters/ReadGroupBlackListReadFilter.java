@@ -3,29 +3,41 @@ package org.broadinstitute.hellbender.engine.filters;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
 import htsjdk.samtools.SAMTag;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.cmdline.ReadFilterArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.text.XReadLines;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.*;
-import java.util.Map.Entry;
 
 /**
  * Keep records not matching the read group tag and exact match string.
- * For example, this filter value:
- *   PU:1000G-mpimg-080821-1_1
- * would filter out a read with the read group PU:1000G-mpimg-080821-1_1
+ *
+ * <p>For example, this filter value:
+ *   <code>PU:1000G-mpimg-080821-1_1</code>
+ * would filter out a read with the read group PU:1000G-mpimg-080821-1_1</p>
  */
-public final class ReadGroupBlackListReadFilter implements ReadFilter {
+@DocumentedFeature(groupName= HelpConstants.DOC_CAT_READFILTERS, groupSummary=HelpConstants.DOC_CAT_READFILTERS_SUMMARY)
+public final class ReadGroupBlackListReadFilter extends ReadFilter implements Serializable {
     private static final long serialVersionUID = 1L;
     public static final String COMMENT_START = "#";
     public static final String FILTER_ENTRY_SEPARATOR = ":";
 
-    private final Set<Entry<String, Collection<String>>> blacklistEntries;
-    private final SAMFileHeader header;
+    @Argument(fullName= ReadFilterArgumentDefinitions.READ_GROUP_BLACK_LIST_LONG_NAME, doc="The name of the read group to filter out", optional=false)
+    public List<String> blackList = new ArrayList<>();
+
+    //most of the collection Entry classes are not serializable so just use a Map
+    private final Map<String, Collection<String>> blacklistEntries = new HashMap<>();
+
+    // Command line parser requires a no-arg constructor
+    public ReadGroupBlackListReadFilter() {};
 
     /**
      * Creates a filter using the lists of files with blacklisted read groups.
@@ -34,6 +46,8 @@ public final class ReadGroupBlackListReadFilter implements ReadFilter {
      * (ie the file may contain names of further files etc).
      */
     public ReadGroupBlackListReadFilter(final List<String> blackLists, final SAMFileHeader header) {
+        super.setHeader(header);
+        this.blackList.addAll(blackLists);
         final Map<String, Collection<String>> filters = new TreeMap<>();
         for (String blackList : blackLists) {
             try {
@@ -42,8 +56,8 @@ public final class ReadGroupBlackListReadFilter implements ReadFilter {
                 throw new UserException("Incorrect blacklist:" + blackList, e);
             }
         }
-        this.blacklistEntries = filters.entrySet();
-        this.header = header;
+        //merge all the new entries in to the blacklist
+        filters.forEach((k, v) -> blacklistEntries.merge(k, v, (v1, v2) -> {v1.addAll(v2); return v1;}));
     }
 
     private void addFilter(final Map<String, Collection<String>> filters, final String filter, final File parentFile, final int parentLineNum) throws IOException {
@@ -94,13 +108,12 @@ public final class ReadGroupBlackListReadFilter implements ReadFilter {
 
     @Override
     public boolean test( final GATKRead read ) {
-        final SAMReadGroupRecord readGroup = ReadUtils.getSAMReadGroupRecord(read, header);
+        final SAMReadGroupRecord readGroup = ReadUtils.getSAMReadGroupRecord(read, samHeader);
         if ( readGroup == null ) {
             return true;
         }
 
-        for (final Entry<String, Collection<String>> blacklistEntry : blacklistEntries) {
-            final String attributeType = blacklistEntry.getKey();
+        for (final String attributeType : blacklistEntries.keySet()) {
 
             final String attribute;
             if (SAMReadGroupRecord.READ_GROUP_ID_TAG.equals(attributeType) || SAMTag.RG.name().equals(attributeType)) {
@@ -108,7 +121,7 @@ public final class ReadGroupBlackListReadFilter implements ReadFilter {
             } else {
                 attribute = readGroup.getAttribute(attributeType);
             }
-            if (attribute != null && blacklistEntry.getValue().contains(attribute)) {
+            if (attribute != null && blacklistEntries.get(attributeType).contains(attribute)) {
                 return false;
             }
         }

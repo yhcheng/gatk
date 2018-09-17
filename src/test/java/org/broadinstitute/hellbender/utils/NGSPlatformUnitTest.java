@@ -8,9 +8,10 @@ import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
 import htsjdk.samtools.reference.IndexedFastaSequenceFile;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -19,11 +20,11 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public final class NGSPlatformUnitTest extends BaseTest {
+public final class NGSPlatformUnitTest extends GATKBaseTest {
 
     // example fasta index file, can be deleted if you don't use the reference
     private IndexedFastaSequenceFile seq;
@@ -31,7 +32,7 @@ public final class NGSPlatformUnitTest extends BaseTest {
     @BeforeClass
     public void setup() throws FileNotFoundException {
         // sequence
-        seq = new CachingIndexedFastaSequenceFile(new File(exampleReference));
+        seq = new CachingIndexedFastaSequenceFile(IOUtils.getPath(exampleReference));
     }
 
     @DataProvider(name = "TestPrimary")
@@ -55,7 +56,7 @@ public final class NGSPlatformUnitTest extends BaseTest {
     public Object[][] makeTestMappings() {
         List<Object[]> tests = new ArrayList<>();
 
-        final Map<String, NGSPlatform> expected = new HashMap<>();
+        final Map<String, NGSPlatform> expected = new LinkedHashMap<>();
         // VALID VALUES ACCORDING TO SAM SPEC: https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=1&ved=0CC8QFjAA&url=http%3A%2F%2Fsamtools.sourceforge.net%2FSAM1.pdf&ei=Dm8WUbXAEsi10QHYqoDwDQ&usg=AFQjCNFkMtvEi6LeiKgpxQGtHTlqWKw2yw&bvm=bv.42080656,d.dmQ
         expected.put("CAPILLARY", NGSPlatform.CAPILLARY);
         expected.put("LS454", NGSPlatform.LS454);

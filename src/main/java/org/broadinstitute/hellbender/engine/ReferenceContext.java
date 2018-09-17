@@ -1,10 +1,14 @@
 package org.broadinstitute.hellbender.engine;
 
+import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.samtools.reference.ReferenceSequence;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.iterators.ByteArrayIterator;
 
+import java.util.Arrays;
 import java.util.Iterator;
 
 /**
@@ -57,7 +61,7 @@ public final class ReferenceContext implements Iterable<Byte> {
      * empty arrays/iterators in response to queries.
      */
     public ReferenceContext() {
-        this(null, null);
+        this(null, null, 0, 0);
     }
 
     /**
@@ -84,9 +88,59 @@ public final class ReferenceContext implements Iterable<Byte> {
      */
     public ReferenceContext( final ReferenceDataSource dataSource, final SimpleInterval interval, final int windowLeadingBases, final int windowTrailingBases ) {
         this.dataSource = dataSource;
-        cachedSequence = null;
+        this.cachedSequence = null;
         this.interval = interval;
         setWindow(windowLeadingBases, windowTrailingBases);
+    }
+
+    /**
+     * Create a windowed ReferenceContext set up to lazily query the provided interval.
+     *
+     * Window is preserved from {@code thatReferenceContext}.
+     *
+     * @param thatContext An existing {@link ReferenceContext} on which to base this new one.
+     * @param interval our location on the reference (may be null if our location is unknown)
+     */
+    public ReferenceContext( final ReferenceContext thatContext, final SimpleInterval interval ) {
+        this.dataSource = thatContext.dataSource;
+        this.cachedSequence = null;
+        this.interval = interval;
+
+        // Determine the window:
+        final int windowLeadingBases = thatContext.numWindowLeadingBases();
+        final int windowTrailingBases = thatContext.numWindowTrailingBases();
+
+        setWindow(windowLeadingBases, windowTrailingBases);
+    }
+
+    /**
+     * Create a windowed ReferenceContext set up to lazily query the provided interval,
+     * expanded by the specified number of bases in each direction.
+     *
+     * Window boundaries are cropped at contig boundaries, if necessary.
+     *
+     * @param dataSource backing reference data source (may be null if there is no reference)
+     * @param interval our location on the reference (may be null if our location is unknown)
+     * @param window the expanded location on the reference. May be null if our location is unknown or there is no expanded window
+     *               (ie., the interval == window case). Must be null if interval is null. Must contain interval
+     *               if both are non-null.
+     */
+    public ReferenceContext( final ReferenceDataSource dataSource, final SimpleInterval interval, final SimpleInterval window ) {
+        this.dataSource = dataSource;
+        this.cachedSequence = null;
+        this.interval = interval;
+        Utils.validateArg(interval != null || window == null, () -> "if interval is null then window must be null too but was " + window);
+        Utils.validateArg( interval == null || window == null || window.contains(interval), () ->
+                "window " + window + " does not contain the interval " + interval);
+
+        // The "windowless" case
+        if ( window == null ) {
+            this.window = interval;
+        } else {
+            this.window = new SimpleInterval(interval.getContig(),
+                    trimToContigStart(window.getStart()),
+                    trimToContigLength(interval.getContig(), window.getEnd()));
+        }
     }
 
     /**
@@ -133,6 +187,51 @@ public final class ReferenceContext implements Iterable<Byte> {
             cachedSequence = dataSource.queryAndPrefetch(window);
         }
         return cachedSequence.getBases();
+    }
+
+    /**
+     * Get all reference bases in this context with the given window.
+     * Does not cache results or modify this {@link ReferenceContext} at all.
+     * Will always return an empty array if there is no backing data source and/or interval to query.
+     *
+     * @return reference bases in this context, as a byte array
+     */
+    public byte[] getBases(final SimpleInterval window) {
+        if ( dataSource == null || window == null ) {
+            return new byte[0];
+        }
+
+        // Trim to the contig start/end:
+        final SimpleInterval trimmedWindow = new SimpleInterval(
+                window.getContig(),
+                trimToContigStart(window.getStart()),
+                trimToContigLength(window.getContig(), window.getEnd())
+        );
+
+        return dataSource.queryAndPrefetch(trimmedWindow).getBases();
+    }
+
+    /**
+     * Get all reference bases in this context with the given leading / trailing bases as the window.
+     * Uses the current {@link ReferenceContext#window} as a basis for the position.
+     * Does not cache results or modify this {@link ReferenceContext} at all.
+     * Will always return an empty array if there is no backing data source and/or interval to query.
+     *
+     * @return reference bases in this context, as a byte array
+     */
+    public byte[] getBases(final int windowLeadingBases, final int windowTrailingBases) {
+        if ( dataSource == null || window == null ) {
+            return new byte[0];
+        }
+
+        // Trim to the contig start/end:
+        final SimpleInterval trimmedWindow = new SimpleInterval(
+                window.getContig(),
+                trimToContigStart(window.getStart() - windowLeadingBases),
+                trimToContigLength(window.getContig(), window.getEnd() + windowTrailingBases)
+        );
+
+        return dataSource.queryAndPrefetch(trimmedWindow).getBases();
     }
 
     /**
@@ -186,8 +285,12 @@ public final class ReferenceContext implements Iterable<Byte> {
      * @param windowTrailingBases Number of extra reference bases to include after the end of our interval. Must be >= 0.
      */
     public void setWindow( final int windowLeadingBases, final int windowTrailingBases ) {
-        if( windowLeadingBases < 0 ) throw new GATKException("Reference window starts after the current interval");
-        if( windowTrailingBases < 0 ) throw new GATKException("Reference window ends before the current interval");
+        if( windowLeadingBases < 0 ) {
+            throw new GATKException("Reference window starts after the current interval");
+        }
+        if( windowTrailingBases < 0 ) {
+            throw new GATKException("Reference window ends before the current interval");
+        }
 
         if ( interval == null || (windowLeadingBases == 0 && windowTrailingBases == 0) ) {
             // the "windowless" case
@@ -235,7 +338,17 @@ public final class ReferenceContext implements Iterable<Byte> {
      * @return The start of the expanded window.
      */
     private int calculateWindowStart( final SimpleInterval locus, final int windowLeadingBases ) {
-        return Math.max(locus.getStart() - windowLeadingBases, 1);
+        return trimToContigStart(locus.getStart() - windowLeadingBases);
+    }
+
+    /**
+     * Determines the start of the expanded reference window, bounded if necessary by the start of the contig.
+     *
+     * @param start the start that is to be trimmed to the contig's start
+     * @return The start, potentially trimmed to the contig's start
+     */
+    private int trimToContigStart(final int start) {
+        return Math.max(start, 1);
     }
 
     /**
@@ -246,8 +359,33 @@ public final class ReferenceContext implements Iterable<Byte> {
      * @return The end of the expanded window.
      */
     private int calculateWindowStop( final SimpleInterval locus, final int windowTrailingBases ) {
-        final int sequenceLength = dataSource.getSequenceDictionary().getSequence(locus.getContig()).getSequenceLength();
-        return Math.min(locus.getEnd() + windowTrailingBases, sequenceLength);
+        return trimToContigLength(locus.getContig(), locus.getEnd() + windowTrailingBases);
+    }
+
+    /**
+     * Determines the end of the expanded reference window, bounded if necessary by the contig.
+     *
+     * @param contig contig on which the location is.
+     * @param end the end that is to be trimmed to the contig's length
+     * @return The end, potentially trimmed to the contig's length
+     */
+    private int trimToContigLength(final String contig, final int end){
+
+        final SAMSequenceRecord sequence = dataSource.getSequenceDictionary().getSequence(contig);
+        if ( sequence == null ) {
+            throw new UserException("Given reference file does not have data at the requested contig(" + contig + ")!");
+        }
+
+        final int sequenceLength = dataSource.getSequenceDictionary().getSequence(contig).getSequenceLength();
+        return Math.min(end, sequenceLength);
+    }
+
+    /**
+     * @param contig
+     * @return the length/end position of the contig
+     */
+    private int getContigLength(final String contig){
+        return dataSource.getSequenceDictionary().getSequence(contig).getSequenceLength();
     }
 
     /**
@@ -255,6 +393,26 @@ public final class ReferenceContext implements Iterable<Byte> {
      * @return The base at the given locus from the reference.
      */
     public byte getBase() {
-        return getBases()[(interval.getStart() - window.getStart())];
+        return getBases()[interval.getStart() - window.getStart()];
+    }
+
+    /**
+     * Get a kmer around a position in reference without altering the internal state of the object
+     * The position must lie within the window
+     *
+     * Returns null when, at the ends of a contig, we cannot expand the window to the requested size
+     */
+    public String getKmerAround(final int center, final int numBasesOnEachSide){
+        Utils.validateArg(center >= 1, () -> "start position must be positive");
+        Utils.validateArg(window.getStart() <= center && center <= window.getEnd(), "position must be smaller than end position");
+
+        final SimpleInterval newWindow = new SimpleInterval(window.getContig(), center, center)
+                .expandWithinContig(numBasesOnEachSide, getContigLength(window.getContig()));
+
+        if (newWindow.getEnd() - newWindow.getStart() < 2*numBasesOnEachSide){
+            return null;
+        }
+
+        return new String(getBases(newWindow));
     }
 }

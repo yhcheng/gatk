@@ -1,21 +1,27 @@
 package org.broadinstitute.hellbender.engine;
 
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.*;
 import htsjdk.samtools.util.CloseableIterator;
 import htsjdk.samtools.util.IOUtil;
+import java.nio.channels.SeekableByteChannel;
+import java.util.function.Function;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.iterators.SAMRecordToReadIterator;
 import org.broadinstitute.hellbender.utils.iterators.SamReaderQueryingIterator;
+import org.broadinstitute.hellbender.utils.nio.SeekableByteChannelPrefetcher;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadConstants;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -41,7 +47,7 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
     /**
      * Hang onto the input files so that we can print useful errors about them
      */
-    private final Map<SamReader, File> backingFiles;
+    private final Map<SamReader, Path> backingPaths;
 
     /**
      * Only reads that overlap these intervals (and unmapped reads, if {@link #traverseUnmapped} is set) will be returned
@@ -73,48 +79,119 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
     private boolean indicesAvailable;
 
     /**
-     * Initialize this data source with a single SAM/BAM file without a reference and validation stringency SILENT.
+     * Initialize this data source with a single SAM/BAM file and validation stringency SILENT.
      *
      * @param samFile SAM/BAM file, not null.
      */
-    public ReadsDataSource( final File samFile ) {
-        this(samFile != null ? Arrays.asList(samFile) : null, null);
+    public ReadsDataSource( final Path samFile ) {
+        this(samFile != null ? Arrays.asList(samFile) : null, (SamReaderFactory)null);
     }
 
     /**
-     * Initialize this data source with multiple SAM/BAM files without a reference and validation stringency SILENT.
+     * Initialize this data source with multiple SAM/BAM files and validation stringency SILENT.
      *
      * @param samFiles SAM/BAM files, not null.
      */
-    public ReadsDataSource( final List<File> samFiles ) {
-        this(samFiles, null);
+    public ReadsDataSource( final List<Path> samFiles ) {
+        this(samFiles, (SamReaderFactory)null);
     }
 
     /**
      * Initialize this data source with a single SAM/BAM file and a custom SamReaderFactory
      *
-     * @param samFile SAM/BAM file, not null.
+     * @param samPath path to SAM/BAM file, not null.
      * @param customSamReaderFactory SamReaderFactory to use, if null a default factory with no reference and validation
      *                               stringency SILENT is used.
      */
-    public ReadsDataSource( final File samFile, SamReaderFactory customSamReaderFactory) {
-        this(samFile != null ? Arrays.asList(samFile) : null, customSamReaderFactory);
+    public ReadsDataSource( final Path samPath, SamReaderFactory customSamReaderFactory ) {
+        this(samPath != null ? Arrays.asList(samPath) : null, customSamReaderFactory);
     }
 
     /**
      * Initialize this data source with multiple SAM/BAM files and a custom SamReaderFactory
      *
-     * @param samFiles SAM/BAM files, not null.
+     * @param samPaths path to SAM/BAM file, not null.
      * @param customSamReaderFactory SamReaderFactory to use, if null a default factory with no reference and validation
      *                               stringency SILENT is used.
      */
-    public ReadsDataSource( final List<File> samFiles, SamReaderFactory customSamReaderFactory ) {
-        if ( samFiles == null || samFiles.size() == 0 ) {
-            throw new IllegalArgumentException("ReadsDataSource cannot be created from empty file list");
+    public ReadsDataSource( final List<Path> samPaths, SamReaderFactory customSamReaderFactory ) {
+        this(samPaths, null, customSamReaderFactory, 0, 0);
+    }
+
+    /**
+     * Initialize this data source with multiple SAM/BAM/CRAM files, and explicit indices for those files.
+     *
+     * @param samPaths paths to SAM/BAM/CRAM files, not null
+     * @param samIndices indices for all of the SAM/BAM/CRAM files, in the same order as samPaths. May be null,
+     *                   in which case index paths are inferred automatically.
+     */
+    public ReadsDataSource( final List<Path> samPaths, final List<Path> samIndices ) {
+        this(samPaths, samIndices, null, 0, 0);
+    }
+
+    /**
+     * Initialize this data source with multiple SAM/BAM/CRAM files, explicit indices for those files,
+     * and a custom SamReaderFactory.
+     *
+     * @param samPaths paths to SAM/BAM/CRAM files, not null
+     * @param samIndices indices for all of the SAM/BAM/CRAM files, in the same order as samPaths. May be null,
+     *                   in which case index paths are inferred automatically.
+     * @param customSamReaderFactory SamReaderFactory to use, if null a default factory with no reference and validation
+     *                               stringency SILENT is used.
+     */
+    public ReadsDataSource( final List<Path> samPaths, final List<Path> samIndices,
+        SamReaderFactory customSamReaderFactory) {
+        this(samPaths, samIndices, customSamReaderFactory, 0, 0);
+    }
+
+    /**
+     * Initialize this data source with multiple SAM/BAM/CRAM files, explicit indices for those files,
+     * and a custom SamReaderFactory.
+     *
+     * @param samPaths paths to SAM/BAM/CRAM files, not null
+     * @param samIndices indices for all of the SAM/BAM/CRAM files, in the same order as samPaths. May be null,
+     *                   in which case index paths are inferred automatically.
+     * @param customSamReaderFactory SamReaderFactory to use, if null a default factory with no reference and validation
+     *                               stringency SILENT is used.
+     * @param cloudPrefetchBuffer MB size of caching/prefetching wrapper for the data, if on Google Cloud (0 to disable).
+     * @param cloudIndexPrefetchBuffer MB size of caching/prefetching wrapper for the index, if on Google Cloud (0 to disable).
+     */
+    public ReadsDataSource( final List<Path> samPaths, final List<Path> samIndices,
+            SamReaderFactory customSamReaderFactory,
+            int cloudPrefetchBuffer, int cloudIndexPrefetchBuffer) {
+        this(samPaths, samIndices, customSamReaderFactory,
+            (cloudPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudPrefetchBuffer, is)
+                                     : Function.identity()),
+            (cloudIndexPrefetchBuffer > 0 ? is -> SeekableByteChannelPrefetcher.addPrefetcher(cloudIndexPrefetchBuffer, is)
+                : Function.identity()));
+    }
+
+    /**
+     * Initialize this data source with multiple SAM/BAM/CRAM files, explicit indices for those files,
+     * and a custom SamReaderFactory.
+     *
+     * @param samPaths paths to SAM/BAM/CRAM files, not null
+     * @param samIndices indices for all of the SAM/BAM/CRAM files, in the same order as samPaths. May be null,
+     *                   in which case index paths are inferred automatically.
+     * @param customSamReaderFactory SamReaderFactory to use, if null a default factory with no reference and validation
+     *                               stringency SILENT is used.
+     * @param cloudWrapper caching/prefetching wrapper for the data, if on Google Cloud.
+     * @param cloudIndexWrapper caching/prefetching wrapper for the index, if on Google Cloud.
+     */
+    public ReadsDataSource( final List<Path> samPaths, final List<Path> samIndices,
+        SamReaderFactory customSamReaderFactory,
+        Function<SeekableByteChannel, SeekableByteChannel> cloudWrapper,
+        Function<SeekableByteChannel, SeekableByteChannel> cloudIndexWrapper) {
+        Utils.nonNull(samPaths);
+        Utils.nonEmpty(samPaths, "ReadsDataSource cannot be created from empty file list");
+
+        if ( samIndices != null && samPaths.size() != samIndices.size() ) {
+            throw new UserException(String.format("Must have the same number of BAM/CRAM/SAM paths and indices. Saw %d BAM/CRAM/SAMs but %d indices",
+                                                  samPaths.size(), samIndices.size()));
         }
 
-        readers = new LinkedHashMap<>(samFiles.size() * 2);
-        backingFiles = new LinkedHashMap<>(samFiles.size() * 2);
+        readers = new LinkedHashMap<>(samPaths.size() * 2);
+        backingPaths = new LinkedHashMap<>(samPaths.size() * 2);
         indicesAvailable = true;
 
         final SamReaderFactory samReaderFactory =
@@ -122,16 +199,39 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
                     SamReaderFactory.makeDefault().validationStringency(ReadConstants.DEFAULT_READ_VALIDATION_STRINGENCY) :
                     customSamReaderFactory;
 
-        for ( final File samFile : samFiles ) {
+        int samCount = 0;
+        for ( final Path samPath : samPaths ) {
             // Ensure each file can be read
             try {
-                IOUtil.assertFileIsReadable(samFile);
+                IOUtil.assertFileIsReadable(samPath);
             }
             catch ( SAMException|IllegalArgumentException e ) {
-                throw new UserException.CouldNotReadInputFile(samFile, e);
+                throw new UserException.CouldNotReadInputFile(samPath.toString(), e);
             }
 
-            SamReader reader = samReaderFactory.open(samFile);
+            Function<SeekableByteChannel, SeekableByteChannel> wrapper =
+                (BucketUtils.isCloudStorageUrl(samPath)
+                    ? cloudWrapper
+                    : Function.identity());
+            // if samIndices==null then we'll guess the index name from the file name.
+            // If the file's on the cloud, then the search will only consider locations that are also
+            // in the cloud.
+            Function<SeekableByteChannel, SeekableByteChannel> indexWrapper =
+                ((samIndices != null && BucketUtils.isCloudStorageUrl(samIndices.get(samCount))
+                 || (samIndices == null && BucketUtils.isCloudStorageUrl(samPath)))
+                    ? cloudIndexWrapper
+                    : Function.identity());
+
+            SamReader reader;
+            if ( samIndices == null ) {
+                reader = samReaderFactory.open(samPath, wrapper, indexWrapper);
+            }
+            else {
+                final SamInputResource samResource = SamInputResource.of(samPath, wrapper);
+                Path indexPath = samIndices.get(samCount);
+                samResource.index(indexPath, indexWrapper);
+                reader = samReaderFactory.open(samResource);
+            }
 
             // Ensure that each file has an index
             if ( ! reader.hasIndex() ) {
@@ -139,11 +239,19 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
             }
 
             readers.put(reader, null);
-            backingFiles.put(reader, samFile);
+            backingPaths.put(reader, samPath);
+            ++samCount;
         }
 
         // Prepare a header merger only if we have multiple readers
-        headerMerger = samFiles.size() > 1 ? createHeaderMerger() : null;
+        headerMerger = samPaths.size() > 1 ? createHeaderMerger() : null;
+    }
+
+    /**
+     * Are indices available for all files?
+     */
+    public boolean indicesAvailable() {
+        return indicesAvailable;
     }
 
     /**
@@ -199,10 +307,10 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
     }
 
     private void raiseExceptionForMissingIndex(String reason) {
-        String commandsToIndex = backingFiles.entrySet().stream()
+        String commandsToIndex = backingPaths.entrySet().stream()
                 .filter(f -> !f.getKey().hasIndex())
                 .map(Map.Entry::getValue)
-                .map(File::getAbsolutePath)
+                .map(Path::toAbsolutePath)
                 .map(f -> "samtools index " + f)
                 .collect(Collectors.joining("\n","\n","\n"));
 
@@ -288,8 +396,19 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
 
         // Set up an iterator for each reader, bounded to overlap with the supplied intervals if there are any
         for ( Map.Entry<SamReader, CloseableIterator<SAMRecord>> readerEntry : readers.entrySet() ) {
-            readerEntry.setValue(traversalIsBounded ? new SamReaderQueryingIterator(readerEntry.getKey(), queryIntervals, queryUnmapped) :
-                                                      readerEntry.getKey().iterator());
+            if (traversalIsBounded) {
+                readerEntry.setValue(
+                        new SamReaderQueryingIterator(
+                                readerEntry.getKey(),
+                                readers.size() > 1 ?
+                                        getIntervalsOverlappingReader(readerEntry.getKey(), queryIntervals) :
+                                        queryIntervals,
+                                queryUnmapped
+                        )
+                );
+            } else {
+                readerEntry.setValue(readerEntry.getKey().iterator());
+            }
         }
 
         // Create a merging iterator over all readers if necessary. In the case where there's only a single reader,
@@ -306,6 +425,19 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
     }
 
     /**
+     * Reduce the intervals down to only include ones that can actually intersect with this reader
+     */
+    private List<SimpleInterval> getIntervalsOverlappingReader(
+            final SamReader samReader,
+            final List<SimpleInterval> queryIntervals)
+    {
+        final SAMSequenceDictionary sequenceDictionary = samReader.getFileHeader().getSequenceDictionary();
+        return queryIntervals.stream()
+                .filter(interval -> IntervalUtils.intervalIsOnDictionaryContig(interval, sequenceDictionary))
+                .collect(Collectors.toList());
+    }
+
+    /**
      * Create a header merger from the individual SAM/BAM headers in our readers
      *
      * @return a header merger containing all individual headers in this data source
@@ -316,14 +448,28 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
             headers.add(readerEntry.getKey().getFileHeader());
         }
 
-        // TODO: don't require coordinate ordering
-        SamFileHeaderMerger headerMerger = new SamFileHeaderMerger(SAMFileHeader.SortOrder.coordinate, headers, true);
+        SamFileHeaderMerger headerMerger = new SamFileHeaderMerger(identifySortOrder(headers), headers, true);
         return headerMerger;
     }
+
+    @VisibleForTesting
+    static SAMFileHeader.SortOrder identifySortOrder(final List<SAMFileHeader> headers){
+        final Set<SAMFileHeader.SortOrder> sortOrders = headers.stream().map(SAMFileHeader::getSortOrder).collect(Collectors.toSet());
+        final SAMFileHeader.SortOrder order;
+        if (sortOrders.size() == 1) {
+            order = sortOrders.iterator().next();
+        } else {
+            order = SAMFileHeader.SortOrder.unsorted;
+            logger.warn("Inputs have different sort orders. Assuming {} sorted reads for all of them.", order);
+        }
+        return order;
+    }
+
 
     /**
      * Shut down this data source permanently, closing all iterations and readers.
      */
+    @Override
     public void close() {
         closePreviousIterationsIfNecessary();
 
@@ -358,5 +504,6 @@ public final class ReadsDataSource implements GATKDataSource<GATKRead>, AutoClos
     public SAMSequenceDictionary getSequenceDictionary() {
         return getHeader().getSequenceDictionary();
     }
+
 
 }

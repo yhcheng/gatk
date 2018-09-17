@@ -1,17 +1,19 @@
 package org.broadinstitute.hellbender.utils;
 
 import com.google.common.collect.Sets;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.bqsr.ApplyBQSR;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.testng.Assert;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-public final class ClassUtilsUnitTest extends BaseTest{
+public final class ClassUtilsUnitTest extends GATKBaseTest {
 
     //These classes are for testing the methods in ClassUtils.
 
@@ -72,8 +74,9 @@ public final class ClassUtilsUnitTest extends BaseTest{
     @Test
     public void testMakeInstances() throws Exception {
         final List<? extends C> cs = ClassUtils.makeInstancesOfSubclasses(C.class, C.class.getPackage());
-        Assert.assertEquals(cs.stream().map(o -> o.getClass().getSimpleName()).collect(Collectors.toSet()),
-                Sets.newHashSet(C1.class.getSimpleName(), C11.class.getSimpleName(), C2.class.getSimpleName()));
+        final Set<String> actualSet = cs.stream().map(o -> o.getClass().getSimpleName()).collect(Collectors.toSet());
+        final Set<String> expectedSet = Sets.newHashSet(C1.class.getSimpleName(), C11.class.getSimpleName(), C2.class.getSimpleName());
+        Assert.assertEquals(actualSet, expectedSet);
     }
 
     @Test
@@ -89,6 +92,36 @@ public final class ClassUtilsUnitTest extends BaseTest{
 
     @Test
     public void testKnownSubinterfaces() throws Exception {
-        Assert.assertEquals(new HashSet<>(ClassUtils.knownSubInterfaceSimpleNames(A.class)), new HashSet<>(Arrays.asList("A1", "B1")));
+        Assert.assertEquals(new LinkedHashSet<>(ClassUtils.knownSubInterfaceSimpleNames(A.class)), new LinkedHashSet<>(Arrays.asList("A1", "B1")));
+    }
+
+    @DataProvider
+    private Object[][] provideForTestGetClassesOfType() {
+
+        final List<Class<?>> mapSubclasses  = new ArrayList<>( ClassUtils.knownSubInterfaces(Map.class) );
+        final List<Class<?>> listSubclasses = new ArrayList<>( ClassUtils.knownSubInterfaces(List.class) );
+
+        return new Object[][] {
+                {
+                        Map.class,
+                        Stream.concat(mapSubclasses.stream(), listSubclasses.stream()).collect(Collectors.toList()),
+                        mapSubclasses
+                },
+                {
+                        List.class,
+                        Stream.concat(mapSubclasses.stream(), listSubclasses.stream()).collect(Collectors.toList()),
+                        listSubclasses
+                },
+                {
+                        B1.class,
+                        new ArrayList<>( ClassUtils.knownSubInterfaces(B1.class) ),
+                        new ArrayList<>()
+                },
+        };
+    }
+
+    @Test(dataProvider = "provideForTestGetClassesOfType")
+    public void testGetClassesOfType_list( final Class<?> clazz, final List<Class<?>> classesToCheck, final List<Class<?>> expected) {
+        Assert.assertEquals( ClassUtils.getClassesOfType(clazz, classesToCheck), expected );
     }
 }

@@ -4,7 +4,10 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.variant.variantcontext.Allele;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.gatk.nativebindings.pairhmm.PairHMMNativeArguments;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.LikelihoodMatrix;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
@@ -14,7 +17,7 @@ import java.io.Closeable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * Class for performing the pair HMM for local alignment. Figure 4.3 in Durbin 1998 book.
@@ -31,20 +34,90 @@ public abstract class PairHMM implements Closeable{
 
     public enum Implementation {
         /* Very slow implementation which uses very accurate log10 sum functions. Only meant to be used as a reference test implementation */
-        EXACT(() -> new Log10PairHMM(true)),
+        EXACT(args -> {
+            final Log10PairHMM hmm = new Log10PairHMM(true);
+            logger.info("Using the non-hardware accelerated Java EXACT PairHMM implementation");
+            return hmm;
+        }),
         /* PairHMM as implemented for the UnifiedGenotyper. Uses log10 sum functions accurate to only 1E-4 */
-        ORIGINAL(() -> new Log10PairHMM(false)),
+        ORIGINAL(args -> {
+            final Log10PairHMM hmm = new Log10PairHMM(false);
+            logger.info("Using the non-hardware-accelerated Java ORIGINAL PairHMM implementation");
+            return hmm;
+        }),
         /* Optimized version of the PairHMM which caches per-read computations and operations in real space to avoid costly sums of log10'ed likelihoods */
-        LOGLESS_CACHING(() -> new LoglessPairHMM());
+        LOGLESS_CACHING(args -> {
+            final LoglessPairHMM hmm = new LoglessPairHMM();
+            logger.info("Using the non-hardware-accelerated Java LOGLESS_CACHING PairHMM implementation");
+            return hmm;
+        }),
+        /* Optimized AVX implementation of LOGLESS_CACHING called through JNI. Throws if AVX is not available */
+        AVX_LOGLESS_CACHING(args -> {
+            // Constructor will throw a UserException if AVX is not available
+            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.AVX, args);
+            logger.info("Using the AVX-accelerated native PairHMM implementation");
+            return hmm;
+        }),
+        /* OpenMP Multi-threaded AVX implementation of LOGLESS_CACHING called through JNI. Throws if OpenMP AVX is not available */
+        AVX_LOGLESS_CACHING_OMP(args -> {
+            // Constructor will throw a UserException if OpenMP AVX is not available
+            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.OMP, args);
+            logger.info("Using the OpenMP multi-threaded AVX-accelerated native PairHMM implementation");
+            return hmm;
+        }),
+        /* FPGA implementation of LOGLESS_CACHING called through JNI. Throws if FPGA is not available */
+        EXPERIMENTAL_FPGA_LOGLESS_CACHING(args -> {
+            // Constructor will throw a UserException if FPGA is not available
+            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.FPGA, args);
+            logger.info("Using the FPGA-accelerated native PairHMM implementation");
+            return hmm;
+        }),
+        /* Uses the fastest available PairHMM implementation supported on the platform.
+           Order of precedence:
+            1. AVX_LOGLESS_CACHING_OMP
+            2. AVX_LOGLESS_CACHING
+            3. LOGLESS_CACHING
+         */
+        FASTEST_AVAILABLE(args -> {
+            // This try block is temporarily commented out becuase FPGA support is experimental for the time being. Once
+            // FPGA support has matured/been properly tested, we can easily add it back the "fastest available" logic
+            // by uncommenting this block
+            // try {
+            //    final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.FPGA, args);
+            //    logger.info("Using the FPGA-accelerated native PairHMM implementation");
+            //    return hmm;
+            //}
+            //catch ( UserException.HardwareFeatureException e ) {
+            //    logger.info("FPGA-accelerated native PairHMM implementation is not supported");
+            //}
+            try {
+                final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.OMP, args);
+                logger.info("Using the OpenMP multi-threaded AVX-accelerated native PairHMM implementation");
+                return hmm;
+            }
+            catch ( UserException.HardwareFeatureException e ) {
+                logger.info("OpenMP multi-threaded AVX-accelerated native PairHMM implementation is not supported");
+            }
+            try {
+                final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.AVX, args);
+                logger.info("Using the AVX-accelerated native PairHMM implementation");
+                return hmm;
+            }
+            catch ( UserException.HardwareFeatureException e ) {
+                logger.warn("***WARNING: Machine does not have the AVX instruction set support needed for the accelerated AVX PairHmm. " +
+                            "Falling back to the MUCH slower LOGLESS_CACHING implementation!");
+                return new LoglessPairHMM();
+            }
+        });
 
-        private final Supplier<PairHMM> makeHmm;
+        private final Function<PairHMMNativeArguments, PairHMM> makeHmm;
 
-        private Implementation(final Supplier<PairHMM> makeHmm){
+        private Implementation(final Function<PairHMMNativeArguments, PairHMM> makeHmm){
             this.makeHmm = makeHmm;
         }
 
-        public PairHMM makeNewHMM() {
-            return makeHmm.get();
+        public PairHMM makeNewHMM(PairHMMNativeArguments args) {
+            return makeHmm.apply(args);
         }
     }
 
@@ -76,8 +149,8 @@ public abstract class PairHMM implements Closeable{
      * @throws IllegalArgumentException if readMaxLength or haplotypeMaxLength is less than or equal to zero
      */
     public void initialize( final int readMaxLength, final int haplotypeMaxLength ) throws IllegalArgumentException {
-        if ( readMaxLength <= 0 ) throw new IllegalArgumentException("readMaxLength must be > 0 but got " + readMaxLength);
-        if ( haplotypeMaxLength <= 0 ) throw new IllegalArgumentException("haplotypeMaxLength must be > 0 but got " + haplotypeMaxLength);
+        Utils.validateArg(readMaxLength > 0, () -> "readMaxLength must be > 0 but got " + readMaxLength);
+        Utils.validateArg(haplotypeMaxLength > 0, () -> "haplotypeMaxLength must be > 0 but got " + haplotypeMaxLength);
 
         maxHaplotypeLength = haplotypeMaxLength;
         maxReadLength = readMaxLength;
@@ -220,15 +293,15 @@ public abstract class PairHMM implements Closeable{
                                                                   final boolean recacheReadValues,
                                                                   final byte[] nextHaplotypeBases) throws IllegalStateException, IllegalArgumentException {
 
-        if ( ! initialized ) throw new IllegalStateException("Must call initialize before calling computeReadLikelihoodGivenHaplotypeLog10");
-        if ( haplotypeBases == null ) throw new IllegalArgumentException("haplotypeBases cannot be null");
-        if ( haplotypeBases.length > maxHaplotypeLength ) throw new IllegalArgumentException("Haplotype bases is too long, got " + haplotypeBases.length + " but max is " + maxHaplotypeLength);
-        if ( readBases == null ) throw new IllegalArgumentException("readBases cannot be null");
-        if ( readBases.length > maxReadLength ) throw new IllegalArgumentException("readBases is too long, got " + readBases.length + " but max is " + maxReadLength);
-        if ( readQuals.length != readBases.length ) throw new IllegalArgumentException("Read bases and read quals aren't the same size: " + readBases.length + " vs " + readQuals.length);
-        if ( insertionGOP.length != readBases.length ) throw new IllegalArgumentException("Read bases and read insertion quals aren't the same size: " + readBases.length + " vs " + insertionGOP.length);
-        if ( deletionGOP.length != readBases.length ) throw new IllegalArgumentException("Read bases and read deletion quals aren't the same size: " + readBases.length + " vs " + deletionGOP.length);
-        if ( overallGCP.length != readBases.length ) throw new IllegalArgumentException("Read bases and overall GCP aren't the same size: " + readBases.length + " vs " + overallGCP.length);
+        Utils.validate(initialized, "Must call initialize before calling computeReadLikelihoodGivenHaplotypeLog10");
+        Utils.nonNull(haplotypeBases, "haplotypeBases may not be null");
+        Utils.validateArg( haplotypeBases.length <= maxHaplotypeLength, () -> "Haplotype bases is too long, got " + haplotypeBases.length + " but max is " + maxHaplotypeLength);
+        Utils.nonNull(readBases);
+        Utils.validateArg( readBases.length <= maxReadLength, () -> "readBases is too long, got " + readBases.length + " but max is " + maxReadLength);
+        Utils.validateArg(readQuals.length == readBases.length, () -> "Read bases and read quals aren't the same size: " + readBases.length + " vs " + readQuals.length);
+        Utils.validateArg( insertionGOP.length == readBases.length, () -> "Read bases and read insertion quals aren't the same size: " + readBases.length + " vs " + insertionGOP.length);
+        Utils.validateArg( deletionGOP.length == readBases.length, () -> "Read bases and read deletion quals aren't the same size: " + readBases.length + " vs " + deletionGOP.length);
+        Utils.validateArg( overallGCP.length == readBases.length, () -> "Read bases and overall GCP aren't the same size: " + readBases.length + " vs " + overallGCP.length);
 
         paddedReadLength = readBases.length + 1;
         paddedHaplotypeLength = haplotypeBases.length + 1;
@@ -241,11 +314,8 @@ public abstract class PairHMM implements Closeable{
 
         final double result = subComputeReadLikelihoodGivenHaplotypeLog10(haplotypeBases, readBases, readQuals, insertionGOP, deletionGOP, overallGCP, hapStartIndex, recacheReadValues, nextHapStartIndex);
 
-        if ( result > 0.0) {
-            throw new IllegalStateException("PairHMM Log Probability cannot be greater than 0: " + String.format("haplotype: %s, read: %s, result: %f, PairHMM: %s", new String(haplotypeBases), new String(readBases), result, this.getClass().getSimpleName()));
-        } else if (!MathUtils.goodLog10Probability(result)) {
-            throw new IllegalStateException("Invalid Log Probability: " + result);
-        }
+        Utils.validate(result <= 0.0, () -> "PairHMM Log Probability cannot be greater than 0: " + String.format("haplotype: %s, read: %s, result: %f, PairHMM: %s", new String(haplotypeBases), new String(readBases), result, this.getClass().getSimpleName()));
+        Utils.validate(MathUtils.goodLog10Probability(result), () -> "Invalid Log Probability: " + result);
 
         // Warning: This assumes no downstream modification of the haplotype bases (saves us from copying the array). It is okay for the haplotype caller.
         previousHaplotypeBases = haplotypeBases;

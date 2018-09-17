@@ -1,6 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -8,9 +8,10 @@ import org.testng.annotations.Test;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 
-public final class CivarUnitTest extends BaseTest {
+public final class CivarUnitTest extends GATKBaseTest {
 
 
     @Test(dataProvider="validCivarExamples")
@@ -80,7 +81,7 @@ public final class CivarUnitTest extends BaseTest {
         expectedSet.addAll(Arrays.asList(expected));
 
         final Civar civar = Civar.fromCharSequence(civarString);
-        java.util.List<Civar> unrolledList = civar.unroll();
+        List<Civar> unrolledList = civar.unroll();
         Assert.assertEquals(unrolledList.size(), expected.length);
         for (int i  = 0; i < expected.length; i++) {
             Assert.assertTrue(expectedSet.contains(unrolledList.get(i).toString()),

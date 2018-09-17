@@ -3,18 +3,16 @@ package org.broadinstitute.hellbender.tools.walkers.variantutils;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.broadinstitute.hellbender.utils.Utils;
 
-public class SelectVariantsUnitTest extends BaseTest {
+public class SelectVariantsUnitTest extends GATKBaseTest {
 
     ///////////////////////////////////////////////////////////
     // Tests for maxIndelSize and minIndelSize functionality //
@@ -57,5 +55,4 @@ public class SelectVariantsUnitTest extends BaseTest {
         final boolean hasIndelTooLargeOrSmall = SelectVariants.containsIndelLargerOrSmallerThan(vc, max, min);
         Assert.assertEquals(hasIndelTooLargeOrSmall, size > max || size < min);
     }
-
 }

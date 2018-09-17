@@ -1,13 +1,13 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller.graphs;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.*;
 
-public final class LowWeightChainPrunerUnitTest extends BaseTest {
+public final class LowWeightChainPrunerUnitTest extends GATKBaseTest {
     @DataProvider(name = "pruneChainsData")
     public Object[][] makePruneChainsData() {
         List<Object[]> tests = new ArrayList<>();
@@ -22,13 +22,12 @@ public final class LowWeightChainPrunerUnitTest extends BaseTest {
         for ( final int edgeWeight : Arrays.asList(1, 2, 3) ) {
             for ( final int pruneFactor : Arrays.asList(1, 2, 3, 4) ) {
                 for ( final boolean isRef : Arrays.asList(true, false)) {
-                    { // just an isolated chain
-                        final int nExpected = edgeWeight < pruneFactor && ! isRef ? 3 : 0;
-                        SeqGraph graph = new SeqGraph(11);
-                        graph.addVertices(v1, v2, v3);
-                        graph.addEdges(() -> new BaseEdge(isRef, edgeWeight), v1, v2, v3);
-                        tests.add(new Object[]{"combinatorial", graph, pruneFactor, nExpected > 0 ? Collections.emptySet() : graph.vertexSet()});
-                    }
+                    // just an isolated chain
+                    final int nExpected = edgeWeight < pruneFactor && ! isRef ? 3 : 0;
+                    SeqGraph graph = new SeqGraph(11);
+                    graph.addVertices(v1, v2, v3);
+                    graph.addEdges(() -> new BaseEdge(isRef, edgeWeight), v1, v2, v3);
+                    tests.add(new Object[]{"combinatorial", graph, pruneFactor, nExpected > 0 ? Collections.emptySet() : graph.vertexSet()});
                 }
             }
         }

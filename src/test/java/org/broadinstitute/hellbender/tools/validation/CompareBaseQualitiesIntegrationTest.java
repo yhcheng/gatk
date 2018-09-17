@@ -1,13 +1,17 @@
 package org.broadinstitute.hellbender.tools.validation;
 
 import org.broadinstitute.hellbender.CommandLineProgramTest;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.util.Objects;
+import java.util.Arrays;
+import java.util.List;
 
 public class CompareBaseQualitiesIntegrationTest extends CommandLineProgramTest {
     @Test
@@ -21,33 +25,35 @@ public class CompareBaseQualitiesIntegrationTest extends CommandLineProgramTest 
         ArgumentsBuilder args = new ArgumentsBuilder();
         args.add(firstBam.getCanonicalPath());
         args.add(secondBam.getCanonicalPath());
-        args.add("--throwOnDiff true");
+        args.add("--throw-on-diff true");
         args.add("--VALIDATION_STRINGENCY SILENT");
-        this.runCommandLine(args.getArgsArray());
+        final Object result = this.runCommandLine(args);
+        Assert.assertEquals(result, 0);
     }
 
     @DataProvider(name = "CompareBasesProvider")
     public Object[][] makeCompareBasesProvider() {
         final String resourceDir = getTestDataDir() + "/validation/";
-        final File outFile = BaseTest.createTempFile(getTestDataDir() + "temp.diff", "txt");
+        final File outFile = GATKBaseTest.createTempFile(getTestDataDir() + "temp.diff", "txt");
         final File firstBam = new File(resourceDir, "single.read.bam");
         final File secondBam = new File(resourceDir, "another.single.read.bam");
         final File firstCram = new File(resourceDir, "single.read.cram");
         final File secondCram = new File(resourceDir, "another.single.read.cram");
         final File referenceFile = new File(b37_reference_20_21);
 
+        final List<Integer> sq = Arrays.asList(10, 20, 30, 40);
         return new Object[][]{
-                {firstBam, firstBam, null, outFile, "single.read.qual.diff.txt"},
-                {firstBam, secondBam, null, outFile, "two.reads.qual.diff.txt"},
-                {firstCram, secondCram, referenceFile, outFile, "two.reads.qual.diff.txt"},
-                {firstBam, secondCram, referenceFile, outFile, "two.reads.qual.diff.txt"},
-                {firstCram, secondBam, referenceFile, outFile, "two.reads.qual.diff.txt"},
+                {firstBam, firstBam, null, outFile, sq, "single.read.qual.diff.txt"},
+                {firstBam, secondBam, null, outFile, sq, "two.reads.qual.diff.txt"},
+                {firstCram, secondCram, referenceFile, outFile, sq, "two.reads.qual.diff.txt"},
+                {firstBam, secondCram, referenceFile, outFile, sq, "two.reads.qual.diff.txt"},
+                {firstCram, secondBam, referenceFile, outFile, sq, "two.reads.qual.diff.txt"},
         };
 
     }
 
     @Test(dataProvider = "CompareBasesProvider")
-    public void singleReadDiffTest(File firstBam, File secondBam, File referenceFile, File outFile, String diffFile) throws Exception {
+    public void singleReadDiffTest(File firstBam, File secondBam, File referenceFile, File outFile, List<Integer> staticQuantizationQuals, String diffFile) throws Exception {
         final String resourceDir = getTestDataDir() + "/validation/";
 
         ArgumentsBuilder args = new ArgumentsBuilder();
@@ -59,8 +65,19 @@ public class CompareBaseQualitiesIntegrationTest extends CommandLineProgramTest 
             args.add("-R");
             args.add(referenceFile.getAbsolutePath());
         }
+        if (staticQuantizationQuals != null && !staticQuantizationQuals.isEmpty()){
+            for (int sq : staticQuantizationQuals){
+                args.add("--" + CompareBaseQualities.STATIC_QUANTIZED_QUALS_LONG_NAME);
+                args.add(sq);
+            }
+        }
 
-        this.runCommandLine(args.getArgsArray());
+        final Object result = this.runCommandLine(args);
+        if (Objects.equals(firstBam, secondBam)) {
+            Assert.assertEquals(result, 0);
+        } else {
+            Assert.assertNotEquals(result, 0);
+        }
 
         final File expected = new File(resourceDir, diffFile);
         IntegrationTestSpec.assertEqualTextFiles(outFile, expected);

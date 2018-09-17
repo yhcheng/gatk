@@ -55,8 +55,8 @@ public final class BaseRecalibratorEngineSparkWrapper implements Serializable {
     }
 
     // saves to output
-    public static void saveTextualReport(String output, SAMFileHeader header, RecalibrationTables rt, RecalibrationArgumentCollection recalArgs, AuthHolder auth) throws IOException {
-        OutputStream oStream = BucketUtils.createFile(output, auth);
+    public static void saveTextualReport(String output, SAMFileHeader header, RecalibrationTables rt, RecalibrationArgumentCollection recalArgs) throws IOException {
+        OutputStream oStream = BucketUtils.createFile(output);
         QuantizationInfo qi = new QuantizationInfo(rt, recalArgs.QUANTIZING_LEVELS);
         if (recalArgs.FORCE_PLATFORM != null) {
             recalArgs.DEFAULT_PLATFORM = recalArgs.FORCE_PLATFORM;
@@ -67,7 +67,7 @@ public final class BaseRecalibratorEngineSparkWrapper implements Serializable {
         }
     }
 
-    public Iterable<RecalibrationTables> apply(Iterator<ContextShard> shards) throws Exception {
+    public Iterator<RecalibrationTables> apply(Iterator<ContextShard> shards) throws Exception {
         this.header = headerBcast.value();
         this.referenceSequenceDictionary = referenceSequenceDictionaryBcast.value();
         recalibrationEngine = new BaseRecalibrationEngine(recalArgs, header);
@@ -87,7 +87,7 @@ public final class BaseRecalibratorEngineSparkWrapper implements Serializable {
         }
         ArrayList<RecalibrationTables> ret = new ArrayList<>();
         ret.add(recalibrationEngine.getRecalibrationTables());
-        return ret;
+        return ret.iterator();
     }
 
 }

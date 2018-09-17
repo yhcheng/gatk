@@ -1,11 +1,12 @@
 package org.broadinstitute.hellbender.tools.walkers.bqsr;
 
 import htsjdk.samtools.util.IOUtil;
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import picard.cmdline.programgroups.OtherProgramGroup;
 import org.broadinstitute.hellbender.utils.recalibration.RecalibrationReport;
 
 import java.io.File;
@@ -15,8 +16,9 @@ import java.util.List;
 @CommandLineProgramProperties(
         summary = "Gathers scattered BQSR recalibration reports into a single file",
         oneLineSummary = "Gathers scattered BQSR recalibration reports into a single file",
-        programGroup = ReadProgramGroup.class
+        programGroup = OtherProgramGroup.class
 )
+@DocumentedFeature
 public final class GatherBQSRReports extends CommandLineProgram {
     @Argument(fullName = StandardArgumentDefinitions.INPUT_LONG_NAME,
             shortName = StandardArgumentDefinitions.INPUT_SHORT_NAME, doc="List of scattered BQSR report files")

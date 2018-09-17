@@ -1,14 +1,17 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import com.google.common.annotations.VisibleForTesting;
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
@@ -40,6 +43,7 @@ import java.util.Map;
  *     <li><b><a href="https://www.broadinstitute.org/gatk/guide/tooldocs/org_broadinstitute_gatk_tools_walkers_annotator_DepthPerAlleleBySample.php">DepthPerAlleleBySample</a></b> calculates depth of coverage for each allele per sample (AD).</li>
  * </ul>
  */
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Variant confidence normalized by unfiltered depth of variant samples (QD)")
 public final class QualByDepth extends InfoFieldAnnotation implements StandardAnnotation {
 
     @VisibleForTesting
@@ -49,17 +53,18 @@ public final class QualByDepth extends InfoFieldAnnotation implements StandardAn
     static final double IDEAL_HIGH_QD = 30;
     private static final double JITTER_SIGMA = 3;
 
+    @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final Map<String, PerReadAlleleLikelihoodMap> perReadAlleleLikelihoodMap) {
+                                        final ReadLikelihoods<Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( !vc.hasLog10PError() ) {
-            return null;
+            return Collections.emptyMap();
         }
 
         final GenotypesContext genotypes = vc.getGenotypes();
         if ( genotypes == null || genotypes.isEmpty() ) {
-            return null;
+            return Collections.emptyMap();
         }
 
         int depth = 0;
@@ -75,15 +80,17 @@ public final class QualByDepth extends InfoFieldAnnotation implements StandardAn
             if ( genotype.hasAD() ) {
                 final int[] AD = genotype.getAD();
                 final int totalADdepth = (int) MathUtils.sum(AD);
-                if ( totalADdepth - AD[0] > 1 ) {
-                    ADrestrictedDepth += totalADdepth;
+                if ( totalADdepth != 0 ) {
+                    if (totalADdepth - AD[0] > 1) {
+                        ADrestrictedDepth += totalADdepth;
+                    }
+                    depth += totalADdepth;
+                    continue;
                 }
-                depth += totalADdepth;
-            } else if (perReadAlleleLikelihoodMap != null) {
-                final PerReadAlleleLikelihoodMap perReadAlleleLikelihoods = perReadAlleleLikelihoodMap.get(genotype.getSampleName());
-                if (perReadAlleleLikelihoods != null && !perReadAlleleLikelihoods.isEmpty()) {
-                    depth += perReadAlleleLikelihoods.size();
-                }
+            }
+            // if there is no AD value or it is a dummy value, we want to look to other means to get the depth
+            if (likelihoods != null) {
+                depth += likelihoods.sampleReadCount(likelihoods.indexOfSample(genotype.getSampleName()));
             } else if ( genotype.hasDP() ) {
                 depth += genotype.getDP();
             }
@@ -95,7 +102,7 @@ public final class QualByDepth extends InfoFieldAnnotation implements StandardAn
         }
 
         if ( depth == 0 ) {
-            return null;
+            return Collections.emptyMap();
         }
 
         final double qual = -10.0 * vc.getLog10PError();
@@ -113,12 +120,10 @@ public final class QualByDepth extends InfoFieldAnnotation implements StandardAn
      * and VQSR will filter these out.  This code looks at the QD value, and if it is above
      * threshold we map it down to the mean high QD value, with some jittering
      *
-     * // TODO -- remove me when HaplotypeCaller bubble caller is live
-     *
      * @param QD the raw QD score
      * @return a QD value
      */
-    private static double fixTooHighQD(final double QD) {
+    public static double fixTooHighQD(final double QD) {
         if ( QD < MAX_QD_BEFORE_FIXING ) {
             return QD;
         } else {
@@ -126,9 +131,6 @@ public final class QualByDepth extends InfoFieldAnnotation implements StandardAn
         }
     }
 
+    @Override
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.QUAL_BY_DEPTH_KEY); }
-
-    public List<VCFInfoHeaderLine> getDescriptions() {
-        return Collections.singletonList(GATKVCFHeaderLines.getInfoLine(getKeyNames().get(0)));
-    }
 }

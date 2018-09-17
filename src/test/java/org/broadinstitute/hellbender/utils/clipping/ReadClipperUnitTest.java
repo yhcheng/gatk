@@ -1,25 +1,22 @@
 package org.broadinstitute.hellbender.utils.clipping;
 
-import htsjdk.samtools.Cigar;
-import htsjdk.samtools.CigarElement;
-import htsjdk.samtools.CigarOperator;
+import htsjdk.samtools.*;
+import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.CigarUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.ReadClipperTestUtils;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.ReadClipperTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 
-import static org.broadinstitute.hellbender.utils.read.ReadUtils.*;
+import static org.broadinstitute.hellbender.utils.read.ReadUtils.getSoftEnd;
+import static org.broadinstitute.hellbender.utils.read.ReadUtils.getSoftStart;
 
-public final class ReadClipperUnitTest extends BaseTest {
+public final class ReadClipperUnitTest extends GATKBaseTest {
     List<Cigar> cigarList;
     int maximumCigarElements = 9;                                                                                           // 6 is the minimum necessary number to try all combinations of cigar types with guarantee of clipping an element with length = 2
 
@@ -348,7 +345,7 @@ public final class ReadClipperUnitTest extends BaseTest {
     }
 
     private class CigarCounter {
-        private HashMap<CigarOperator, Integer> counter;
+        private Map<CigarOperator, Integer> counter;
 
         public Integer getCounterForOp(CigarOperator operator) {
             return counter.get(operator);
@@ -356,7 +353,7 @@ public final class ReadClipperUnitTest extends BaseTest {
 
         public CigarCounter(GATKRead read) {
             CigarOperator[] operators = CigarOperator.values();
-            counter = new HashMap<>(operators.length);
+            counter = new LinkedHashMap<>(operators.length);
 
             for (CigarOperator op : operators)
                 counter.put(op, 0);
@@ -383,10 +380,103 @@ public final class ReadClipperUnitTest extends BaseTest {
     }
 
     @Test
-    public void testRevertEntirelySoftclippedReads() {
+    public void testRevertEntirelySoftClippedReads() {
         GATKRead read = ReadClipperTestUtils.makeReadFromCigar("2H1S3H");
         GATKRead clippedRead = ReadClipper.revertSoftClippedBases(read);
         Assert.assertEquals(clippedRead.getStart(), getSoftStart(read));
+    }
+
+
+    @Test
+    public void testSoftClipBothEndsByReferenceCoordinates() {
+        for (Cigar cigar : cigarList) {
+            GATKRead read = ReadClipperTestUtils.makeReadFromCigar(cigar);
+            int alnStart = read.getStart();
+            int alnEnd = read.getEnd();
+            int readLength = alnStart - alnEnd;
+            for (int i = 0; i < readLength / 2; i++) {
+                GATKRead clippedRead = ReadClipper.softClipBothEndsByReferenceCoordinates(read, alnStart + i, alnEnd - i);
+                Assert.assertTrue(clippedRead.getStart() >= alnStart + i, String.format("Clipped alignment start is less than original read (minus %d): %s -> %s", i, read.getCigar().toString(), clippedRead.getCigar().toString()));
+                Assert.assertTrue(clippedRead.getEnd() <= alnEnd + i, String.format("Clipped alignment end is greater than original read (minus %d): %s -> %s", i, read.getCigar().toString(), clippedRead.getCigar().toString()));
+                assertUnclippedLimits(read, clippedRead);
+            }
+        }
+    }
+
+    // This test depends on issue #2022 as it tests the current behavior of the clipping operation
+    @Test
+    public void testSoftClippingOpEdgeCase() {
+        final SAMFileHeader header = new SAMFileHeader();
+        header.setSequenceDictionary(hg19GenomeLocParser.getSequenceDictionary());
+
+        GATKRead read = ReadClipperTestUtils.makeReadFromCigar("8M");
+        ReadClipper clipper = new ReadClipper(read);
+        ClippingOp op = new ClippingOp(0, 7);
+        clipper.addOp(op);
+        GATKRead softResult = clipper.clipRead(ClippingRepresentation.SOFTCLIP_BASES);
+        Assert.assertEquals(softResult.getCigar().toString(), "7S1M");
+    }
+
+
+
+    //Test pending resolution of issue #2022
+    @Test (enabled = false)
+    public void testSoftClipByReferenceCoordinates() {
+        for (Cigar cigar : cigarList) {
+            if(cigar.isValid(null, -1) != null) {
+                continue;
+            }
+            GATKRead read = ReadClipperTestUtils.makeReadFromCigar(cigar);
+            int start = getSoftStart(read);
+            int stop = getSoftEnd(read);
+
+            for (int i = start; i <= stop; i++) {
+                GATKRead clipLeft = (new ReadClipper(read.copy())).softClipByReferenceCoordinates(-1, i);
+                if (!clipLeft.isEmpty()) {
+                    Assert.assertTrue(clipLeft.getStart() >= Math.min(read.getEnd(), i + 1), String.format("Clipped alignment start (%d) is less the expected (%d): %s -> %s", clipLeft.getStart(), i + 1, read.getCigar().toString(), clipLeft.getCigar().toString()));
+                }
+                GATKRead clipRight = (new ReadClipper(read.copy())).softClipByReferenceCoordinates(i, -1);
+                if (!clipRight.isEmpty() && clipRight.getStart() <= clipRight.getEnd()) {             // alnStart > alnEnd if the entire read is a soft clip now. We can't test those.
+                    Assert.assertTrue(clipRight.getEnd() <= Math.max(read.getStart(), i - 1), String.format("Clipped alignment end (%d) is greater than expected (%d): %s -> %s", clipRight.getEnd(), i - 1, read.getCigar().toString(), clipRight.getCigar().toString()));
+                }
+            }
+        }
+    }
+
+    // Test fix for https://github.com/broadinstitute/gatk/issues/3466
+    @Test
+    public void testHardClipSoftClippedBasesResultsInEmptyReadDontSetNegativeStartPosition() {
+        final GATKRead originalRead = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode("170H70S"));
+        // It's important that the read be near the start of the contig for this test, to test
+        // that we don't attempt to set the read's start position to a negative value during clipping.
+        // See https://github.com/broadinstitute/gatk/issues/3466
+        originalRead.setPosition(originalRead.getContig(), 100);
+
+        final GATKRead clippedRead = ReadClipper.hardClipSoftClippedBases(originalRead);
+        Assert.assertEquals(clippedRead.getLength(), 0);
+        Assert.assertTrue(clippedRead.isEmpty());
+        Assert.assertEquals(clippedRead.getBases().length, 0);
+        Assert.assertEquals(clippedRead.getBaseQualities().length, 0);
+        Assert.assertEquals(clippedRead.numCigarElements(), 0);
+        Assert.assertTrue(clippedRead.isUnmapped());
+    }
+
+    // Test fix for https://github.com/broadinstitute/gatk/issues/3845
+    @Test
+    public void testRevertSoftClippedBasesDoesntExplodeOnCompletelyClippedRead() {
+        final GATKRead originalRead = ArtificialReadUtils.createArtificialRead(TextCigarCodec.decode("41S59H"));
+        // It's important that the read be AT the start of the contig for this test, so that
+        // we clip away ALL of the reverted soft-clipped bases, resulting in an empty read.
+        originalRead.setPosition(originalRead.getContig(), 1);
+        
+        final GATKRead clippedRead = ReadClipper.revertSoftClippedBases(originalRead);
+
+        Assert.assertEquals(clippedRead.getLength(), 0);
+        Assert.assertTrue(clippedRead.isEmpty());
+        Assert.assertEquals(clippedRead.getBases().length, 0);
+        Assert.assertEquals(clippedRead.getBaseQualities().length, 0);
+        Assert.assertEquals(clippedRead.numCigarElements(), 0);
+        Assert.assertTrue(clippedRead.isUnmapped());
     }
 
 }

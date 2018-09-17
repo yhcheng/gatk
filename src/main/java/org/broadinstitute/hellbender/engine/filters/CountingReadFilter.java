@@ -1,13 +1,18 @@
 package org.broadinstitute.hellbender.engine.filters;
 
+import com.google.common.annotations.VisibleForTesting;
+
+import htsjdk.samtools.SAMFileHeader;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.Utils;
 
+import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.IntStream;
 
 /**
- * Wrapper/adapter for ReadFilter that counts the number of reads filtered, and provides a filter count summary.
+ * Wrapper/adapter for {@link org.broadinstitute.hellbender.engine.filters.ReadFilter} that counts the number of
+ * reads filtered, and provides a filter count summary.
  *
  * For filters with complex predicates that are composed of compound and/or operators, provides counts
  * by level for each component predicate. All counts reflect short-circuited evaluation of and/or operators
@@ -16,31 +21,48 @@ import java.util.stream.IntStream;
  * predicates, i.e. an "or" filter will report a filter count of 1 in the case where both component predicates
  * are evaluated and both fail, but the the individual component filters will report a count of 1 at the next
  * level.
- *
  */
-public class CountingReadFilter implements ReadFilter {
+public class CountingReadFilter extends ReadFilter {
 
     private static final long serialVersionUID = 1L;
 
     // Underlying ReadFilter we delegate to if we're wrapping a simple ReadFilter.
-    private final ReadFilter delegateFilter;
-
-    // Name for this filter, used to report filter count summaries
-    protected final String name;
+    @VisibleForTesting
+    protected final ReadFilter delegateFilter;
 
     // Number of reads filtered by this filter
     protected long filteredCount = 0;
 
-    public CountingReadFilter(final String filterName, final ReadFilter readFilter) {
+    public CountingReadFilter(final ReadFilter readFilter) {
         Utils.nonNull(readFilter);
-        name = filterName;
         delegateFilter = readFilter;
+    }
+
+    /**
+     * Return a composite (and) {@code CountingReadFilter} constructed from a list of
+     * {@link org.broadinstitute.hellbender.engine.filters.ReadFilter}. Each filter in the list is first
+     * initialized with the {@code SAMFileHeader} param. The resulting filter honors the order of the input list
+     * and tests the filter conditions in the same order as the iteration order of the input list.
+     * @param readFilters If null or empty, the ALLOW_ALL_READS read filter will be returned
+     * @param samHeader {@code SAMFileHeader} used to initialize each filter. May not be null
+     * @return Composite CountingReadFilter
+     */
+    public static CountingReadFilter fromList(final List<ReadFilter> readFilters, final SAMFileHeader samHeader) {
+        Utils.nonNull(samHeader, "SAMFileHeader must not be null");
+        if (readFilters == null || readFilters.isEmpty()) {
+            return new CountingReadFilter(ReadFilterLibrary.ALLOW_ALL_READS);
+        }
+        readFilters.forEach(f -> f.setHeader(samHeader));
+        CountingReadFilter compositeFilter = new CountingReadFilter(readFilters.get(0));
+        for (int i = 1; i < readFilters.size(); i++) {
+            compositeFilter = compositeFilter.and(new CountingReadFilter(readFilters.get(i)));
+        }
+        return compositeFilter;
     }
 
     // Used only by the nested CountingBinopReadFilter subclass and its derivatives, which must
     // override the test method with an implementation that does not depend on delegateFilter.
-    private CountingReadFilter(final String filterName) {
-        name = filterName;
+    private CountingReadFilter() {
         delegateFilter = null;
     }
 
@@ -53,14 +75,14 @@ public class CountingReadFilter implements ReadFilter {
         filteredCount = 0;
     }
 
-    public String getName() {return name;}
+    public String getName() {return delegateFilter.getClass().getSimpleName();}
 
     // Returns a summary line with filter counts organized by level
     public String getSummaryLine() {return getSummaryLineForLevel(0);}
 
     protected String getSummaryLineForLevel(final int indentLevel) {
         if (0 == filteredCount) {
-            return 0 == indentLevel ? "" : "No reads filtered by: " + getName();
+            return "No reads filtered by: " + getName();
         }
         else {
             return getIndentString(indentLevel) + Long.toString(filteredCount) + " read(s) filtered by: " + getName() + " \n";
@@ -96,7 +118,7 @@ public class CountingReadFilter implements ReadFilter {
      */
     @Override
     public CountingReadFilter negate() {
-        return new CountingReadFilter("(Not '" + getName() + "')",(t) -> !test(t));
+        return new CountingNegateReadFilter(this);
     }
 
     @Override
@@ -108,21 +130,44 @@ public class CountingReadFilter implements ReadFilter {
         return accept;
     }
 
+    private static class CountingNegateReadFilter extends CountingReadFilter {
+        private static final long serialVersionUID = 1L;
+
+        CountingReadFilter delegateCountingFilter;
+
+        public CountingNegateReadFilter(CountingReadFilter delegate) {
+            this.delegateCountingFilter = delegate;
+        }
+
+        @Override
+        public boolean test(GATKRead read) {
+            final boolean accept = !delegateCountingFilter.test(read);
+            if (!accept) {
+                filteredCount++;
+            }
+            return accept;
+        }
+
+        @Override
+        public String getName() {
+            return "Not " + delegateCountingFilter.getName();
+        }
+    }
+
     /**
      * Private class for Counting binary operator (and/or) filters; these keep track of how many reads are filtered at
      * each level of filter nesting.
      *
      * Subclasses must override the test method.
      */
-    private abstract class CountingBinopReadFilter extends CountingReadFilter {
+    private static abstract class CountingBinopReadFilter extends CountingReadFilter {
 
         private static final long serialVersionUID = 1L;
 
-        final CountingReadFilter lhs;
-        final CountingReadFilter rhs;
+        protected final CountingReadFilter lhs;
+        protected final CountingReadFilter rhs;
 
-        public CountingBinopReadFilter(final String name, final CountingReadFilter lhs, final CountingReadFilter rhs) {
-            super(name);
+        public CountingBinopReadFilter(final CountingReadFilter lhs, final CountingReadFilter rhs) {
             Utils.nonNull(lhs);
             Utils.nonNull(rhs);
             this.lhs = lhs;
@@ -141,17 +186,28 @@ public class CountingReadFilter implements ReadFilter {
                         + (rhs.getFilteredCount() > 0 ? indent + rhs.getSummaryLineForLevel(indentLevel + 1) : "");
             }
         }
+
+        @Override
+        public void resetFilteredCount() {
+            super.resetFilteredCount();
+            this.lhs.resetFilteredCount();
+            this.rhs.resetFilteredCount();
+        }
+
+        @Override
+        public abstract String getName();
     }
 
     /**
      * Private class for Counting AND filters
      */
-    private class CountingAndReadFilter extends CountingBinopReadFilter {
+    @VisibleForTesting
+    protected static final class CountingAndReadFilter extends CountingBinopReadFilter {
 
         private static final long serialVersionUID = 1L;
 
         private CountingAndReadFilter(final CountingReadFilter lhs, final CountingReadFilter rhs) {
-            super("(" + lhs.getName() + " AND " + rhs.getName() + ")", lhs, rhs);
+            super(lhs, rhs);
         }
 
         @Override
@@ -162,17 +218,22 @@ public class CountingReadFilter implements ReadFilter {
             }
             return accept;
         }
+
+        @Override
+        public String getName() {
+            return "(" + lhs.getName() + " AND " + rhs.getName() + ")";
+        }
     }
 
     /**
      * Private class for Counting OR filters
      */
-    private class CountingOrReadFilter extends CountingBinopReadFilter {
+    private static final class CountingOrReadFilter extends CountingBinopReadFilter {
 
         private static final long serialVersionUID = 1L;
 
         private CountingOrReadFilter(final CountingReadFilter lhs, final CountingReadFilter rhs) {
-            super("(" + lhs.getName() + " OR " + rhs.getName() + ")", lhs, rhs);
+            super(lhs, rhs);
         }
 
         @Override
@@ -182,6 +243,11 @@ public class CountingReadFilter implements ReadFilter {
                 filteredCount++;
             }
             return accept;
+        }
+
+        @Override
+        public String getName() {
+            return "(" + lhs.getName() + " OR " + rhs.getName() + ")";
         }
     }
 }

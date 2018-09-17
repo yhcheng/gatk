@@ -23,6 +23,9 @@ import java.util.List;
  * }
  *
  * Please use this class for reading lines in a file.
+ *
+ * Note: If you need to read lines in a Path (perhaps one that points to a Google bucket),
+ * you can use PathLineIterator.
  */
 public final class XReadLines implements Iterator<String>, Iterable<String>, AutoCloseable {
     private final BufferedReader in;      // The stream we're reading from
@@ -82,10 +85,12 @@ public final class XReadLines implements Iterator<String>, Iterable<String>, Aut
      * I'm an iterator too...
      * @return an iterator
      */
+    @Override
     public Iterator<String> iterator() {
         return this;
     }
 
+    @Override
     public boolean hasNext() {
         return this.nextLine != null;
     }
@@ -100,7 +105,7 @@ public final class XReadLines implements Iterator<String>, Iterable<String>, Aut
         while ((nextLine = this.in.readLine()) != null) {
             if (this.trimWhitespace) {
                 nextLine = nextLine.trim();
-                if (nextLine.length() == 0)
+                if (nextLine.isEmpty())
                     continue;
             }
             if (this.commentPrefix != null)
@@ -115,6 +120,7 @@ public final class XReadLines implements Iterator<String>, Iterable<String>, Aut
      * Returns the next line (optionally minus whitespace)
      * @return the next line
      */
+    @Override
     public String next() {
         try {
             String result = this.nextLine;
@@ -133,10 +139,12 @@ public final class XReadLines implements Iterator<String>, Iterable<String>, Aut
     }
 
     // The file is read-only; we don't allow lines to be removed.
+    @Override
     public void remove() {
         throw new UnsupportedOperationException();
     }
 
+    @Override
     public void close() throws IOException {
         this.in.close();
     }

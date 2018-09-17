@@ -4,23 +4,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
 import com.google.common.collect.RangeMap;
-import com.google.common.collect.Sets;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypeBuilder;
-import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.variantcontext.VariantContextBuilder;
+import htsjdk.variant.variantcontext.*;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import htsjdk.variant.vcf.VCFCodec;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFStandardHeaderLines;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
@@ -31,16 +26,12 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.function.BiPredicate;
 
-public class GVCFWriterUnitTest extends BaseTest {
+import static htsjdk.variant.vcf.VCFConstants.MAX_GENOTYPE_QUAL;
+
+public class GVCFWriterUnitTest extends GATKBaseTest {
 
     private static final String CHR1 = "1";
     private static final String CHR2 = "2";
@@ -50,9 +41,11 @@ public class GVCFWriterUnitTest extends BaseTest {
         boolean headerWritten = false;
         boolean closed = false;
         boolean error = false;
+        boolean headerSet = false;
 
         @Override
         public void writeHeader(VCFHeader header) {
+            headerSet = true;
             headerWritten = true;
         }
 
@@ -70,12 +63,17 @@ public class GVCFWriterUnitTest extends BaseTest {
         public void add(VariantContext vc) {
             emitted.add(vc);
         }
+
+        @Override
+        public void setHeader(VCFHeader header) {
+            headerSet = true;
+        }
     }
 
     private static final List<Integer> standardPartition = ImmutableList.of(1, 10, 20);
     private static final Allele REF = Allele.create("G", true);
     private static final Allele ALT = Allele.create("A");
-    private static final List<Allele> ALLELES = ImmutableList.of(REF, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE);
+    private static final List<Allele> ALLELES = ImmutableList.of(REF, Allele.NON_REF_ALLELE);
     private static final String SAMPLE_NAME = "XXYYZZ";
 
 
@@ -84,7 +82,17 @@ public class GVCFWriterUnitTest extends BaseTest {
         final MockWriter mockWriter = new MockWriter();
         final GVCFWriter writer = new GVCFWriter(mockWriter, standardPartition, HomoSapiensConstants.DEFAULT_PLOIDY);
         writer.writeHeader(new VCFHeader());
+        Assert.assertTrue(mockWriter.headerSet);
         Assert.assertTrue(mockWriter.headerWritten);
+    }
+
+    @Test
+    public void testHeaderSetting(){
+        final MockWriter mockWriter = new MockWriter();
+        final GVCFWriter writer = new GVCFWriter(mockWriter, standardPartition, HomoSapiensConstants.DEFAULT_PLOIDY);
+        writer.setHeader(new VCFHeader());
+        Assert.assertTrue(mockWriter.headerSet);
+        Assert.assertFalse(mockWriter.headerWritten);
     }
 
     @Test
@@ -132,6 +140,16 @@ public class GVCFWriterUnitTest extends BaseTest {
         gb.DP(10);
         gb.AD(new int[]{1, 2});
         gb.PL(new int[]{0, gq, 20+gq});
+        return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
+    }
+
+    private static VariantContext makeVariantContext(VariantContextBuilder vcb, List<Allele> alleles, int gq, int[] PPs) {
+        final GenotypeBuilder gb = new GenotypeBuilder(SAMPLE_NAME, alleles);
+        gb.DP(10);
+        gb.AD(new int[]{1, 2});
+        gb.PL(new int[]{0, gq, 20+gq});
+        gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(PPs));
+        gb.GQ(MathUtils.secondSmallestMinusSmallest(PPs, gq));
         return vcb.genotypes(gb.make()).id(VCFConstants.EMPTY_ID_FIELD).make();
     }
 
@@ -238,15 +256,28 @@ public class GVCFWriterUnitTest extends BaseTest {
         assertGoodVC(mockWriter.emitted.get(1), CHR2, 1, 1, true);
     }
 
+    @SuppressWarnings("unchecked")
+    private static void assertGoodVCwithPPs(final VariantContext vc, final String contig, final int start, final int stop, final boolean nonRef) {
+        final Genotype g = vc.getGenotype(SAMPLE_NAME);
+        Assert.assertTrue(g.hasExtendedAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY));
+        final List<Integer> PPs = (List<Integer>)vc.getGenotype(0).getAnyAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY);
+        if (!nonRef) {
+            Assert.assertTrue(PPs.size() == 3);
+            Assert.assertTrue(g.hasGQ());
+            Assert.assertTrue(PPs.get(1) == g.getGQ());
+        }
+        assertGoodVC(vc, contig, start, stop, nonRef);
+    }
+
     private static void assertGoodVC(final VariantContext vc, final String contig, final int start, final int stop, final boolean nonRef) {
         Assert.assertEquals(vc.getContig(), contig);
         Assert.assertEquals(vc.getStart(), start);
         Assert.assertEquals(vc.getEnd(), stop);
         if ( nonRef ) {
-            Assert.assertNotEquals(vc.getAlternateAllele(0), GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE);
+            Assert.assertNotEquals(vc.getAlternateAllele(0), Allele.NON_REF_ALLELE);
         } else {
             Assert.assertEquals(vc.getNAlleles(), 2);
-            Assert.assertEquals(vc.getAlternateAllele(0), GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE);
+            Assert.assertEquals(vc.getAlternateAllele(0), Allele.NON_REF_ALLELE);
             Assert.assertEquals(vc.getAttributeAsInt(VCFConstants.END_KEY, -1), stop);
             Assert.assertTrue(vc.hasGenotypes());
             Assert.assertTrue(vc.hasGenotype(SAMPLE_NAME));
@@ -296,7 +327,19 @@ public class GVCFWriterUnitTest extends BaseTest {
     }
 
 
+    @Test
+    public void testBandingUsingPP() {
+        final MockWriter mockWriter = new MockWriter();
+        final GVCFWriter writer = new GVCFWriter(mockWriter, standardPartition, HomoSapiensConstants.DEFAULT_PLOIDY);
 
+        int[] PPs1 = {0,63,128};
+        int[] PPs2 = {0,67,145};
+        writer.add(makeVariantContext(new VariantContextBuilder("test", CHR1, 10000, 10000, ALLELES), Arrays.asList(REF, REF), 2, PPs1));
+        writer.add(makeVariantContext(new VariantContextBuilder("test", CHR1, 10001, 10001, ALLELES), Arrays.asList(REF, REF), 21, PPs2));
+        writer.close();
+        Assert.assertEquals(mockWriter.emitted.size(), 1);
+        assertGoodVCwithPPs(mockWriter.emitted.get(0), CHR1, 10000, 10001, false);
+    }
 
 
     @Test
@@ -356,18 +399,21 @@ public class GVCFWriterUnitTest extends BaseTest {
     @DataProvider(name = "GoodBandPartitionData")
     public Object[][] makeBandPartitionData() {
         return new Object[][]{
-                {Collections.singletonList(1), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,Integer.MAX_VALUE))},
-                {Arrays.asList(1, 2, 3), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,2), Range.closedOpen(2,3),Range.closedOpen(3,Integer.MAX_VALUE))},
-                {Arrays.asList(1, 10), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, Integer.MAX_VALUE))},
-                {Arrays.asList(1, 10, 30), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, 30),Range.closedOpen(30,Integer.MAX_VALUE))},
+                {Collections.singletonList(1), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 2, 3), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,2), Range.closedOpen(2,3),Range.closedOpen(3,MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 10), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 10, 30), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, 30),Range.closedOpen(30,MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 10, MAX_GENOTYPE_QUAL - 1), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, MAX_GENOTYPE_QUAL - 1),Range.closedOpen(MAX_GENOTYPE_QUAL - 1,MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 10, MAX_GENOTYPE_QUAL), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, MAX_GENOTYPE_QUAL), Range.closedOpen(MAX_GENOTYPE_QUAL, MAX_GENOTYPE_QUAL+1))},
+                {Arrays.asList(1, 10, MAX_GENOTYPE_QUAL + 1), Arrays.asList(Range.closedOpen(0,1), Range.closedOpen(1,10), Range.closedOpen(10, MAX_GENOTYPE_QUAL+1))},
+                {Collections.singletonList(VCFConstants.MAX_GENOTYPE_QUAL + 1), Arrays.asList(Range.closedOpen(0,MAX_GENOTYPE_QUAL+1))}
         };
     }
 
     @Test(dataProvider = "GoodBandPartitionData")
     public void testGoodPartitions(final List<Integer> partitions, List<Range<Integer>> expected) {
         final RangeMap<Integer, Range<Integer>> ranges = GVCFWriter.parsePartitions(partitions);
-        Assert.assertEquals(new ArrayList<>(ranges.asMapOfRanges().keySet()), expected);
-
+        Assert.assertEquals(new ArrayList<>(ranges.asMapOfRanges().values()), expected);
     }
 
     @DataProvider(name = "BadBandPartitionData")
@@ -377,7 +423,9 @@ public class GVCFWriterUnitTest extends BaseTest {
                 {Collections.emptyList()},
                 {Arrays.asList(10, 1, 30)},
                 {Arrays.asList(-1, 1)},
-                {Arrays.asList(1, null, 10)}
+                {Arrays.asList(1, null, 10)},
+                {Arrays.asList(1, 1, 10)},
+                {Arrays.asList(1, 10, MAX_GENOTYPE_QUAL+2)}
         };
     }
 
@@ -436,7 +484,7 @@ public class GVCFWriterUnitTest extends BaseTest {
     @Test(dataProvider = "toWriteToDisk")
     public void writeGVCFToDisk(List<VariantContext> variants, List<MinimalData> expected) {
         final List<Integer> gqPartitions = Arrays.asList(1, 10, 30);
-        final File outputFile =  createTempFile("generated", ".gvcf");
+        final File outputFile =  createTempFile("generated", ".g.vcf");
 
         try (VariantContextWriter writer = GATKVariantContextUtils.createVCFWriter(outputFile, null, false);
              GVCFWriter gvcfWriter = new GVCFWriter(writer, gqPartitions, HomoSapiensConstants.DEFAULT_PLOIDY))
@@ -448,7 +496,7 @@ public class GVCFWriterUnitTest extends BaseTest {
     }
 
     private static VCFHeader getMinimalVCFHeader() {
-        final Set<VCFHeaderLine> headerlines = new HashSet<>();
+        final Set<VCFHeaderLine> headerlines = new LinkedHashSet<>();
         VCFStandardHeaderLines.addStandardFormatLines(headerlines, true,
                 VCFConstants.GENOTYPE_KEY, VCFConstants.DEPTH_KEY,
                 VCFConstants.GENOTYPE_QUALITY_KEY, VCFConstants.GENOTYPE_PL_KEY,
@@ -468,12 +516,12 @@ public class GVCFWriterUnitTest extends BaseTest {
                .forEach( c -> headerlines.add(GATKVCFHeaderLines.getInfoLine(c)));
 
         headerlines.add(GATKVCFHeaderLines.getFormatLine(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY));
-        return new VCFHeader(headerlines, Sets.newHashSet(SAMPLE_NAME));
+        return new VCFHeader(headerlines, Collections.singleton(SAMPLE_NAME));
     }
 
     private static void assertGVCFIsParseableAndVariantsMatch(File variantFile, List<MinimalData> expected) {
         Assert.assertTrue(variantFile.exists());
-        try ( FeatureDataSource<VariantContext> input = new FeatureDataSource<>(variantFile, new VCFCodec()))
+        try ( FeatureDataSource<VariantContext> input = new FeatureDataSource<>(variantFile))
         {
             final List<VariantContext> variants = Lists.newArrayList(input.iterator());
             Assert.assertEquals(variants.size(), expected.size());
@@ -504,7 +552,7 @@ public class GVCFWriterUnitTest extends BaseTest {
     public void testAgainstExampleGVCF() throws IOException {
         final List<Integer> gqPartitions = Arrays.asList(1, 10, 20, 30, 40, 50, 60);
         final File comparisonFile = new File("src/test/resources/org/broadinstitute/hellbender/utils/variant/writers/small.g.vcf");
-        final File outputFile = createTempFile("generated", ".gvcf");
+        final File outputFile = createTempFile("generated", ".g.vcf");
         final VariantContextBuilder chr = new VariantContextBuilder().chr(CHR1);
         final Allele REF_C = Allele.create("C", true);
         final Allele REF_G = Allele.create("G", true);
@@ -514,17 +562,20 @@ public class GVCFWriterUnitTest extends BaseTest {
                 .DP(35)
                 .GQ(57)
                 .PL(new int[]{0, 57, 855});
-        final VariantContextBuilder block1 = new VariantContextBuilder(null, "1", 14663, 14663, Arrays.asList(REF_C, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE))
+        final VariantContextBuilder block1 = new VariantContextBuilder(null, "1", 14663, 14663, Arrays.asList(REF_C,
+                                                                                                              Allele.NON_REF_ALLELE))
                 .genotypes(block1GenotypeBuilder.make());
 
-        final VariantContextBuilder block2 = new VariantContextBuilder(null, "1", 14667, 14667, Arrays.asList(REF_G, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE))
+        final VariantContextBuilder block2 = new VariantContextBuilder(null, "1", 14667, 14667, Arrays.asList(REF_G,
+                                                                                                              Allele.NON_REF_ALLELE))
                 .genotypes(new GenotypeBuilder(SAMPLE_NAME, Arrays.asList(REF_G,REF_G))
                         .DP(34)
                         .GQ(60)
                         .PL(new int[]{0, 60, 900})
                         .make());
 
-        final VariantContext snp = new VariantContextBuilder(null, "1", 14673, 14673, Arrays.asList(REF_G, C, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE))
+        final VariantContext snp = new VariantContextBuilder(null, "1", 14673, 14673, Arrays.asList(REF_G, C,
+                                                                                                    Allele.NON_REF_ALLELE))
                 .log10PError(541.77 / -10 )
                 .attribute(GATKVCFConstants.BASE_QUAL_RANK_SUM_KEY, "-1.814")
                 .attribute(GATKVCFConstants.CLIPPING_RANK_SUM_KEY, "2.599")
@@ -549,7 +600,8 @@ public class GVCFWriterUnitTest extends BaseTest {
                 .GQ(54)
                 .PL(new int[]{0, 54, 810});
 
-        final VariantContextBuilder block3 = new VariantContextBuilder(null, "1", 14674, 14674, Arrays.asList(REF_G, GATKVCFConstants.NON_REF_SYMBOLIC_ALLELE))
+        final VariantContextBuilder block3 = new VariantContextBuilder(null, "1", 14674, 14674, Arrays.asList(REF_G,
+                                                                                                              Allele.NON_REF_ALLELE))
                 .genotypes(block3genotypeBuilder.make());
 
         try (VariantContextWriter writer = GATKVariantContextUtils.createVCFWriter(outputFile, null, false);

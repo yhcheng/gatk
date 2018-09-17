@@ -1,6 +1,6 @@
 package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 
 import java.io.File;
@@ -13,17 +13,6 @@ public final class OptionalReferenceInputArgumentCollection extends ReferenceInp
 
     @Argument(fullName = StandardArgumentDefinitions.REFERENCE_LONG_NAME, shortName = StandardArgumentDefinitions.REFERENCE_SHORT_NAME, doc = "Reference sequence", optional = true)
     private String referenceFileName;
-
-    private File referenceFile = null;
-
-    // Not thread-safe
-    @Override
-    public File getReferenceFile() {
-        if (null!=referenceFile) return referenceFile;
-        if (null==referenceFileName) return null;
-        referenceFile = new File(referenceFileName);
-        return referenceFile;
-    }
 
     @Override
     public String getReferenceFileName() {

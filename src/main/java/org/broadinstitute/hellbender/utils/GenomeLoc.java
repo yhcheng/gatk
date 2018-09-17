@@ -11,6 +11,8 @@ import java.util.*;
  * Genome location representation.  It is *** 1 *** based closed.  Note that GenomeLocs start and stop values
  * can be any positive or negative number, by design.  Bound validation is a feature of the GenomeLocParser,
  * and not a fundamental constraint of the GenomeLoc
+ *
+ * This class is not intended to be extended outside of the core GATK engine and tests.
  */
 public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenomeLocation, Locatable {
     private static final long serialVersionUID = 1L;
@@ -62,6 +64,7 @@ public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenome
     //
     // Accessors
     //
+    @Override
     public final GenomeLoc getLocation() { return this; }
 
     public final GenomeLoc getStartLocation() { return new GenomeLoc(getContig(),getContigIndex(),getStart(),getStart()); }
@@ -71,11 +74,13 @@ public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenome
     /**
      * @return the name of the contig of this GenomeLoc
      */
+    @Override
     public final String getContig() {
         return this.contigName;
     }
 
     public final int getContigIndex() { return this.contigIndex; }
+    @Override
     public final int getStart()    { return this.start; }
 
     @Override
@@ -358,6 +363,7 @@ public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenome
         return -1;
     }
 
+    @Override
     public int compareTo( final GenomeLoc that ) {
         int result = 0;
 
@@ -525,7 +531,7 @@ public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenome
      *
      * @return a newly allocated GenomeLoc as loc but with start == start
      */
-    public GenomeLoc setStart(final GenomeLoc loc, final int start) {
+    public static GenomeLoc setStart(final GenomeLoc loc, final int start) {
         Utils.nonNull(loc);
         return new GenomeLoc(loc.getContig(), loc.getContigIndex(), start, loc.getStop());
     }
@@ -540,8 +546,19 @@ public class GenomeLoc implements Comparable<GenomeLoc>, Serializable, HasGenome
      *
      * @return a newly allocated GenomeLoc as loc but with stop == stop
      */
-    public GenomeLoc setStop(final GenomeLoc loc, final int stop) {
+    public static GenomeLoc setStop(final GenomeLoc loc, final int stop) {
         Utils.nonNull(loc);
         return new GenomeLoc(loc.getContig(), loc.getContigIndex(), loc.start, stop);
+    }
+
+    /**
+     * Returns a new GenomeLoc that represents the region between the endpoints of this and that. Requires that
+     * this and that GenomeLoc are both mapped.
+     */
+    public GenomeLoc endpointSpan(final GenomeLoc that) {
+        Utils.validateArg(!isUnmapped(this) && !isUnmapped(that), "Cannot get endpoint span for unmerged genome locs");
+        Utils.validateArg(this.getContig().equals(that.getContig()), "Cannot get endpoint span for genome locs on different contigs");
+
+        return new GenomeLoc(getContig(),this.contigIndex,Math.min(getStart(),that.getStart()),Math.max(getStop(),that.getStop()));
     }
 }

@@ -3,7 +3,7 @@ package org.broadinstitute.hellbender.utils;
 import htsjdk.samtools.SAMFileHeader;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -13,7 +13,7 @@ import java.util.*;
 /**
  * Basic unit test for GenomeLoc
  */
-public final class GenomeLocUnitTest extends BaseTest {
+public final class GenomeLocUnitTest extends GATKBaseTest {
 
     /**
      * Tests that we got a string parameter in correctly
@@ -62,6 +62,31 @@ public final class GenomeLocUnitTest extends BaseTest {
         Assert.assertEquals(twoOne.compareTo(oneOne), 1);
     }
 
+    @Test
+    public void testEndpointSpan() throws Exception {
+        GenomeLoc twoOne = hg19GenomeLocParser.createGenomeLoc("2", 1);
+        GenomeLoc twoFive = hg19GenomeLocParser.createGenomeLoc("2", 5);
+        final GenomeLoc twoOne_twoFive = twoOne.endpointSpan(twoFive);
+        final GenomeLoc twoFive_twoOne = twoFive.endpointSpan(twoOne);
+
+        final GenomeLoc expectedSpan =  hg19GenomeLocParser.createGenomeLoc("2", 1, 5);
+        Assert.assertEquals(twoOne_twoFive, expectedSpan);
+        Assert.assertEquals(twoFive_twoOne, expectedSpan);
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testEndpointSpanUnmapped() throws Exception {
+        GenomeLoc twoOne = hg19GenomeLocParser.createGenomeLoc("2", 1);
+        GenomeLoc unmapped = GenomeLoc.UNMAPPED;
+        twoOne.endpointSpan(unmapped);
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testEndpointWrongContig() throws Exception {
+        GenomeLoc twoOne = hg19GenomeLocParser.createGenomeLoc("2", 1);
+        GenomeLoc threeFive = hg19GenomeLocParser.createGenomeLoc("3", 5);
+        twoOne.endpointSpan(threeFive);
+    }
 
     @Test
     public void testUnmappedSort() {

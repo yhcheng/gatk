@@ -2,10 +2,11 @@ package org.broadinstitute.hellbender.tools.spark;
 
 import htsjdk.samtools.BAMIndex;
 import htsjdk.samtools.util.IOUtil;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.seqdoop.hadoop_bam.SplittingBAMIndex;
 import org.seqdoop.hadoop_bam.SplittingBAMIndexer;
 import org.testng.Assert;
@@ -54,7 +55,7 @@ public class CreateHadoopBamSplittingIndexIntegrationTest extends CommandLinePro
         Assert.assertTrue(splittingBAMIndex.size() > 0 );
     }
 
-    @Test(expectedExceptions = UserException.BadArgumentValue.class)
+    @Test(expectedExceptions = CommandLineException.BadArgumentValue.class)
     public void testNegativeGranularity(){
         final ArgumentsBuilder args = getInputAndOutputArgs(SORTED_BAM, getTempIndexFile())
             .add("--"+ CreateHadoopBamSplittingIndex.SPLITTING_INDEX_GRANULARITY_LONG_NAME).add(-10);

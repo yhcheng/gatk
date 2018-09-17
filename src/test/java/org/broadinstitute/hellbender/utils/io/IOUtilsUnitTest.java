@@ -1,59 +1,280 @@
 package org.broadinstitute.hellbender.utils.io;
 
+import com.google.common.jimfs.Configuration;
+import com.google.common.jimfs.Jimfs;
 import org.apache.logging.log4j.core.util.FileUtils;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.testutils.BaseTest;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
+import org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
 import org.testng.Assert;
+import org.testng.SkipException;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Random;
+import java.io.*;
+import java.nio.file.FileSystem;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.*;
+import java.util.stream.Collectors;
 
-public final class IOUtilsUnitTest extends BaseTest {
+public final class IOUtilsUnitTest extends GATKBaseTest {
 
+    private FileSystem jimfs;
+
+    @BeforeClass
+    public void setUp() {
+        jimfs = Jimfs.newFileSystem(Configuration.unix());
+    }
+    @AfterClass
+    public void tearDown() {
+        try {
+            jimfs.close();
+        } catch (final IOException e) {
+            log("Unable to close JimFS");
+        }
+    }
+
+    private List<String> getSortedRecursiveDirectoryContentsFileNames(final Path directoryPath) throws IOException {
+        final List<String> fileList = Files.walk(directoryPath)
+                .map(f -> f.toFile().getName())
+                .collect(Collectors.toList());
+        fileList.sort(Comparator.naturalOrder());
+        return fileList;
+    }
+
+    private void assertContentsTheSame(final Path baseActualPath, final Path baseExpectedPath) {
+
+        try {
+            final List<String> expectedFiles = getSortedRecursiveDirectoryContentsFileNames(baseExpectedPath);
+            final List<String> actualFiles = getSortedRecursiveDirectoryContentsFileNames(baseActualPath);
+
+            // Make sure the list of output files is what we expect:
+            if (!actualFiles.equals(expectedFiles)) {
+                final String actualFilesString = actualFiles.stream().collect(Collectors.joining(","));
+                final String expectedFilesString = expectedFiles.stream().collect(Collectors.joining(","));
+
+                // Duplicating a little work here for a good error message:
+                Assert.assertEquals(actualFiles, expectedFiles, "Actual file list differs from expected file list: ACTUAL=[" + actualFilesString + "] , EXPECTED=[" + expectedFilesString + "]");
+            }
+
+            // Check that the files and directories are the same:
+            Files.find(baseActualPath, Integer.MAX_VALUE,
+                    (actualPath, fileAttributes) -> {
+
+                        // First check that the corresponding file exists in our expected unzipped archive:
+                        final Path expectedPath = baseExpectedPath.resolve(baseActualPath.relativize(actualPath));
+
+                        final Path actualFileName = actualPath.getFileName();
+                        final Path expectedFileName = expectedPath.getFileName();
+
+                        Assert.assertEquals(actualFileName, expectedFileName);
+
+                        // For regular files, make sure the contents of the corresponding files are the same:
+                        if ( fileAttributes.isRegularFile() && !fileAttributes.isSymbolicLink()) {
+                            try {
+                                final byte[] actualContents   = Files.readAllBytes(actualPath);
+                                final byte[] expectedContents = Files.readAllBytes(expectedPath);
+
+                                Assert.assertEquals(actualContents, expectedContents);
+                            }
+                            catch (final IOException ex) {
+                                throw new GATKException("Could not verify contents of files: " + actualPath.toUri() + " AND " + expectedPath.toUri(), ex);
+                            }
+                        }
+
+                        return true;
+                    }
+            );
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not verify identical contents of test directories!");
+        }
+    }
+
+    @DataProvider
+    private Object[][] provideForTestExtractTarGz() {
+        return new Object[][] {
+                { null },
+                { createTempDir("provideForTestExtractTarGz_Case2").toPath() },
+        };
+    }
+
+    @Test(dataProvider = "provideForTestExtractTarGz")
+    public void testExtractTarGz(final Path destDir) {
+
+        final Path outputDataSourcesPath;
+
+        // Prepare our output directory:
+        if ( destDir == null ) {
+            final File tmpDir = createTempDir("IOUtilsUnitTest_testExtractTarGz");
+            final Path tmpDirPath            = tmpDir.toPath();
+            outputDataSourcesPath = tmpDirPath.resolve(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ).getFileName());
+
+            // Copy our data sources to the destination folder:
+            try {
+                Files.copy(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ), outputDataSourcesPath);
+            }
+            catch (final IOException ex) {
+                throw new GATKException("Could not copy files for testing!", ex);
+            }
+
+            // Extract the files:
+            IOUtils.extractTarGz( outputDataSourcesPath );
+        }
+        else {
+            // Extract the files:
+            IOUtils.extractTarGz( IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ), destDir );
+
+            outputDataSourcesPath = destDir.resolve(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ).getFileName());
+        }
+
+        // Get the base expected data sources output path:
+        final Path baseExpectedOutputDataSourcesPath = IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_FOLDER);
+
+        // Get the base file path for the output:
+        final Path baseActualOutputDataSourcesPath = outputDataSourcesPath.getParent().resolve(
+                baseExpectedOutputDataSourcesPath.getFileName()
+        );
+
+        // Now compare the files with the files in the known output folder:
+        assertContentsTheSame(baseActualOutputDataSourcesPath, baseExpectedOutputDataSourcesPath);
+    }
+
+    @Test(expectedExceptions = UserException.class)
+    public void testExtractTarGzThrowsExceptionOnExistingOutput() {
+
+        // Prepare our output directory:
+        final File tmpDir = createTempDir("IOUtilsUnitTest_testExtractTarGz");
+        final Path tmpDirPath            = tmpDir.toPath();
+        final Path outputDataSourcesPath = tmpDirPath.resolve(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ).getFileName());
+
+        // Copy our data sources to the destination folder:
+        try {
+            Files.copy(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ), outputDataSourcesPath);
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not copy files for testing!", ex);
+        }
+
+        // Extract the files:
+        IOUtils.extractTarGz( outputDataSourcesPath );
+
+        // Extract them again and explode:
+        IOUtils.extractTarGz( outputDataSourcesPath );
+    }
+
+    @Test
+    public void testExtractTarGzOverwrite() {
+
+        // Prepare our output directory:
+        final File tmpDir = createTempDir("IOUtilsUnitTest_testExtractTarGz");
+        final Path tmpDirPath            = tmpDir.toPath();
+        final Path outputDataSourcesPath = tmpDirPath.resolve(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ).getFileName());
+
+        // Copy our data sources to the destination folder:
+        try {
+            Files.copy(IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_TAR_GZ), outputDataSourcesPath);
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not copy files for testing!", ex);
+        }
+
+        // Extract the files:
+        IOUtils.extractTarGz( outputDataSourcesPath );
+
+        // Get the base expected data sources output path:
+        final Path baseExpectedOutputDataSourcesPath = IOUtils.getPath(FuncotatorTestConstants.DUMMY_DATA_SOURCES_FOLDER);
+
+        // Get the base file path for the output:
+        final Path baseActualOutputDataSourcesPath = outputDataSourcesPath.getParent().resolve(
+                baseExpectedOutputDataSourcesPath.getFileName()
+        );
+
+        // Now compare the files with the files in the known output folder:
+        assertContentsTheSame(baseActualOutputDataSourcesPath, baseExpectedOutputDataSourcesPath);
+
+        // Extract them again and overwrite them:
+        IOUtils.extractTarGz( outputDataSourcesPath, outputDataSourcesPath.getParent(), true );
+
+        // Now compare the files with the files in the known output folder AGAIN:
+        assertContentsTheSame(baseActualOutputDataSourcesPath, baseExpectedOutputDataSourcesPath);
+    }
+
+    @Test
+    public void testCreateFifoFile() {
+
+        // Create an output location for the test files to go:
+        final File tmpDir = createTempDir("IOUtilsUnitTest_testCreateFifoFile");
+        final Path tmpDirPath = tmpDir.toPath();
+
+        // Create a FIFO file:
+        final Path fifoFilePath = tmpDirPath.resolve(IOUtils.getPath("FIFOFILE"));
+        IOUtils.createFifoFile( fifoFilePath);
+
+        // Verify the FIFO file exists and is a FIFO file:
+        Assert.assertTrue( Files.exists(fifoFilePath) );
+        try {
+            Assert.assertTrue( Files.readAttributes(fifoFilePath, BasicFileAttributes.class).isOther() );
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not verify file is a FIFO file!", ex);
+        }
+
+        // Create the same FIFO file again and overwrite it:
+        IOUtils.createFifoFile( fifoFilePath, true );
+
+        // Verify the FIFO file exists and is a FIFO file:
+        Assert.assertTrue( Files.exists(fifoFilePath) );
+        try {
+            Assert.assertTrue( Files.readAttributes(fifoFilePath, BasicFileAttributes.class).isOther() );
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not verify file is a FIFO file!", ex);
+        }
+    }
+
+    @Test(expectedExceptions = UserException.class)
+    public void testCreateFifoFileThrows() {
+
+        // Create an output location for the test files to go:
+        final Path tmpDirPath = createTempDir("IOUtilsUnitTest_testCreateFifoFileThrows").toPath();
+
+        // Create a FIFO file:
+        final Path fifoFilePath = tmpDirPath.resolve(IOUtils.getPath("FIFOFILE"));
+        IOUtils.createFifoFile( fifoFilePath );
+
+        // Verify the FIFO file exists and is a FIFO file:
+        Assert.assertTrue( Files.exists(fifoFilePath) );
+        try {
+            Assert.assertTrue( Files.readAttributes(fifoFilePath, BasicFileAttributes.class).isOther() );
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not verify file is a FIFO file!", ex);
+        }
+
+        // Create the same FIFO file again and overwrite it:
+        // This will throw:
+        IOUtils.createFifoFile( fifoFilePath );
+    }
 
     @Test
     public void testTempDir() {
-        File tempDir = IOUtils.tempDir("Q-Unit-Test", "", new File("queueTempDirToDelete"));
+        File tempDir = IOUtils.createTempDir("Q-Unit-Test");
         Assert.assertTrue(tempDir.exists());
         Assert.assertFalse(tempDir.isFile());
         Assert.assertTrue(tempDir.isDirectory());
         boolean deleted = IOUtils.tryDelete(tempDir);
         Assert.assertTrue(deleted);
         Assert.assertFalse(tempDir.exists());
-    }
-
-    @Test
-    public void testAbsolute() {
-        File dir = IOUtils.absolute(new File("/path/./to/./directory/."));
-        Assert.assertEquals(dir, new File("/path/to/directory"));
-
-        dir = IOUtils.absolute(new File("/"));
-        Assert.assertEquals(dir, new File("/"));
-
-        dir = IOUtils.absolute(new File("/."));
-        Assert.assertEquals(dir, new File("/"));
-
-        dir = IOUtils.absolute(new File("/././."));
-        Assert.assertEquals(dir, new File("/"));
-
-        dir = IOUtils.absolute(new File("/./directory/."));
-        Assert.assertEquals(dir, new File("/directory"));
-
-        dir = IOUtils.absolute(new File("/./directory/./"));
-        Assert.assertEquals(dir, new File("/directory"));
-
-        dir = IOUtils.absolute(new File("/./directory./"));
-        Assert.assertEquals(dir, new File("/directory."));
-
-        dir = IOUtils.absolute(new File("/./.directory/"));
-        Assert.assertEquals(dir, new File("/.directory"));
     }
 
     @Test
@@ -112,7 +333,7 @@ public final class IOUtilsUnitTest extends BaseTest {
 
     @Test( expectedExceptions = UserException.CouldNotReadInputFile.class )
     public void testReadNonExistentFileIntoByteArray() {
-        File nonExistentFile = new File("djfhsdkjghdfk");
+        File nonExistentFile = GATKBaseTest.getSafeNonExistentFile("djfhsdkjghdfk");
         Assert.assertFalse(nonExistentFile.exists());
 
         IOUtils.readFileIntoByteArray(nonExistentFile);
@@ -140,7 +361,7 @@ public final class IOUtilsUnitTest extends BaseTest {
         //It runs at jvm shutdown so there isn't a good way to test it properly.
         //If you see a directory in the hellbender main folder called
 
-        final File dir = new File(BaseTest.publicTestDir + "I_SHOULD_HAVE_BEEN_DELETED");
+        final File dir = new File(GATKBaseTest.publicTestDir + "I_SHOULD_HAVE_BEEN_DELETED");
         IOUtils.deleteRecursivelyOnExit(dir);
 
         FileUtils.mkdir(dir, true);
@@ -169,6 +390,209 @@ public final class IOUtilsUnitTest extends BaseTest {
         Assert.assertEquals(IOUtils.replaceExtension(new File(input), "new"), new File(expected));
     }
 
+    @Test(groups={"bucket"})
+    public void testGetPath() throws IOException {
+        innerTestGetPath(getGCPTestInputPath() + "large/CEUTrio.HiSeq.WGS.b37.NA12878.20.21.bam");
+        innerTestGetPath("file://" + NA12878_20_21_WGS_bam);
+        innerTestGetPath(NA12878_20_21_WGS_bam);
+    }
 
+    @Test
+    public void testGetPathHandlesIntervals() throws IOException {
+        // Make sure we don't crash if passing intervals to getPath.
+        // Also, it shouldn't crash when we check whether the file exists.
+        Assert.assertFalse(Files.exists(IOUtils.getPath("chr1:10-11")));
+        Assert.assertFalse(Files.exists(IOUtils.getPath("chr1:10")));
+        Assert.assertFalse(Files.exists(IOUtils.getPath("1:10-11")));
+        Assert.assertFalse(Files.exists(IOUtils.getPath("1:10")));
+    }
+
+    private void innerTestGetPath(String s) throws IOException {
+        Path p = IOUtils.getPath(s);
+        long size = Files.size(p);
+        Assert.assertTrue(size>0);
+    }
+
+    @DataProvider
+    public Object[][] absoluteNames() {
+        return new Object[][] {
+                {"relative/example.txt", new File("relative/example.txt").getAbsolutePath()},
+                {"/local/example.txt", "/local/example.txt"},
+                // note that path normalization removes the extra / in file://
+                {"/local/file://example.txt", "/local/file:/example.txt"},
+                {"file:///local/example.txt", "/local/example.txt"},
+                {"gs://dir/example.txt", "gs://dir/example.txt"}
+        };
+    }
+
+    @Test(dataProvider = "absoluteNames")
+    public void testGetAbsolutePathWithoutFileProtocol(final String uriString, final String expected) {
+        Assert.assertEquals(IOUtils.getAbsolutePathWithoutFileProtocol(IOUtils.getPath(uriString)), expected);
+    }
+
+    @Test
+    public void testSuccessfulCanReadFileCheck() {
+        final File expectedFile = createTempFile("Utils-can-read-test",".txt");
+        IOUtils.canReadFile(expectedFile);
+    }
+
+    @Test
+    public void testSuccessfulCanReadFilesCheck() {
+        final File file1 = createTempFile("Utils-can-read-test1",".txt");
+        final File file2 = createTempFile("Utils-can-read-test2",".txt");
+        IOUtils.canReadFile(file1, file2);
+    }
+
+    @DataProvider(name = "unsuccessfulCanReadFileCheckData")
+    public Object[][] unsuccessfulCanReadFileCheckData() {
+        final File directory = createTempDir("Utils-can-read-file-Dir");
+        final File nonExistingFile = createTempFile("Utils-cant-read-NoFile", ".file");
+        nonExistingFile.delete();
+        final File nonReadable = createTempFile("Utils-cant-read-NotReadable", ".file");
+
+        //Note: if this test suite is run as root (eg in a Docker image), setting readable to false may fail.
+        // So we check it here and skip this test if we can't make a file non readable.
+        final boolean successSetNotReadable = nonReadable.setReadable(false) && !nonReadable.canRead();
+        if (successSetNotReadable) {
+            return new Object[][]{{directory}, {nonExistingFile}, {nonReadable}};
+        } else {
+            //pass in a special value to be able to throw a SkipException and make the same number of tests
+            logger.debug("cannot make a file unreadable (maybe you're running as root)");
+            return new Object[][]{{directory}, {nonExistingFile}, {null}};
+        }
+    }
+
+    @Test(dataProvider = "unsuccessfulCanReadFileCheckData",
+            expectedExceptions = UserException.CouldNotReadInputFile.class)
+    public void testUnsuccessfulCanReadFileCheck(final File file) {
+        if (file == null){
+            throw new SkipException("cannot make a file unreadable (maybe you're running as root)");
+        }
+        IOUtils.canReadFile(file);
+    }
+
+    @Test
+    public void testCreateDirectory() throws IOException {
+
+        // hdfs
+        Path tempPath = IOUtils.getPath(MiniClusterUtils.getWorkingDir(MiniClusterUtils.getMiniCluster()).toUri().toString())
+                .resolve("temp");
+        IOUtils.createDirectory(tempPath.toUri().toString());
+        Assert.assertTrue(java.nio.file.Files.exists(tempPath));
+
+        // local
+        tempPath = IOUtils.getPath(BaseTest.createTempDir("xxx").getAbsolutePath().concat("/sub"));
+        IOUtils.createDirectory(tempPath.toUri().toString());
+        Assert.assertTrue(java.nio.file.Files.exists(tempPath));
+    }
+
+    @DataProvider(name="urlEncodeDecode")
+    public Object[][] urlEncodeDecode() {
+        return new Object[][]{
+                // string, url encoding
+                { "string", "string"},
+                { "string.", "string."},
+                { "string1", "string1"},
+                { "string with space", "string+with+space"},
+                { "string://", "string%3A%2F%2F"},
+        };
+    }
+
+    @Test(dataProvider = "urlEncodeDecode")
+    public void testUrlEncodeDecode(final String string, final String encoded) {
+        Assert.assertEquals(IOUtils.urlEncode(string), encoded);
+        Assert.assertEquals(string, IOUtils.urlDecode(encoded));
+    }
+
+    @DataProvider(name="resourcePaths")
+    public Object[][] getResourcePaths() {
+        final String testResourceContents = "this is a test resource file";
+        return new Object[][] {
+                { Resource.LARGE_RUNTIME_RESOURCES_PATH + "/testResourceFile.txt", null , testResourceContents},
+                { "testResourceFile.txt", IOUtils.class , testResourceContents},
+        };
+    }
+
+    @Test(dataProvider = "resourcePaths")
+    public void testWriteTempResource(
+            final String resourcePath, final Class<?> relativeClass, final String expectedFirstLine) throws IOException
+    {
+        final Resource largeResource = new Resource(resourcePath, relativeClass);
+        final File resourceFile = IOUtils.writeTempResource(largeResource);
+        final String resourceContentsFirstLine = getFirstLineAndDeleteTempFile(resourceFile);
+        Assert.assertEquals(resourceContentsFirstLine, expectedFirstLine);
+    }
+
+    @Test(dataProvider = "resourcePaths")
+    public void testWriteTempResourceFromPath(
+            final String resourcePath, final Class<?> relativeClass, final String expectedFirstLine) throws IOException
+    {
+        final File resourceFile = IOUtils.writeTempResourceFromPath(resourcePath, relativeClass);
+        final String resourceContentsFirstLine = getFirstLineAndDeleteTempFile(resourceFile);
+        Assert.assertEquals(resourceContentsFirstLine, expectedFirstLine);
+    }
+
+    @Test
+    public void testCreateTempFileInDirectory() {
+        final File tempDir = createTempDir("testCreateTempFileInDirectory");
+        final File tempFile = IOUtils.createTempFileInDirectory("testCreateTempFileInDirectory", ".txt", tempDir);
+        Assert.assertTrue(tempFile.exists(), "file was not written to temp file: " + tempFile);
+        Assert.assertEquals(tempFile.getParentFile().getAbsolutePath(), (tempDir.getAbsolutePath()),
+                "file was not written to temp file: " + tempFile + " in dir: " + tempDir);
+    }
+
+    @DataProvider
+    public Object[][] tmpPathDirs() throws Exception {
+        return new Object[][] {
+                {createTempDir("local").toPath()},
+                {Files.createDirectory(jimfs.getPath("tmp"))}
+        };
+    }
+
+    @Test(dataProvider = "tmpPathDirs", singleThreaded = true)
+    public void testTempPath(final Path tempDir) throws Exception {
+        // store the previous tmp.dir to check that it is working
+        final String previousTmpDir = System.getProperty("java.io.tmpdir");
+        try {
+            System.setProperty("java.io.tmpdir", IOUtils.getAbsolutePathWithoutFileProtocol(tempDir));
+            final Path tempFile = IOUtils.createTempPath(UUID.randomUUID().toString(), ".txt");
+            Assert.assertTrue(Files.exists(tempFile),
+                    "file was not written to temp file: " + tempFile);
+            Assert.assertEquals(tempFile.getParent().toUri().toString(), tempDir.toUri().toString(),
+                    "file was not written to temp file: " + tempFile + " in dir: " + tempDir);
+        } finally {
+            System.setProperty("java.io.tmpdir", previousTmpDir);
+        }
+    }
+
+    private String getFirstLineAndDeleteTempFile(final File tempResourceFile) throws IOException {
+        String resourceContentsFirstLine = "";
+        try (final FileReader fr = new FileReader(tempResourceFile);
+             final BufferedReader br = new BufferedReader(fr)) {
+            resourceContentsFirstLine = br.readLine();
+        }
+        finally {
+            tempResourceFile.delete();
+        }
+        return resourceContentsFirstLine;
+    }
+
+    @DataProvider
+    private Object[][] getIsHDF5TestFiles() {
+        return new Object[][] {
+                { getToolTestDataDir() + "/isValidHDF5.hdf5", true },
+                { getToolTestDataDir() + "isValidHDF5.ext", true },
+                { getToolTestDataDir() + "/isTSV.tsv", false },
+                { getToolTestDataDir() + "/isTSV.hdf", false },
+                { getToolTestDataDir() + "/isTSV.hdf5", false },
+                { getToolTestDataDir() + "/isEmpty.txt", false },
+        };
+    }
+
+    @Test(dataProvider = "getIsHDF5TestFiles")
+    public void testIsHDF5File(final String filePath, final boolean expected) {
+        final Path testPath = Paths.get(filePath);
+        Assert.assertEquals(IOUtils.isHDF5File(testPath), expected);
+    }
 
 }

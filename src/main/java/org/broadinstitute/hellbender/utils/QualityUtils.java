@@ -95,7 +95,7 @@ public final class QualityUtils {
      * @return a probability (0.0-1.0)
      */
     public static double qualToProb(final double qual) {
-        if ( qual < 0.0 ) throw new IllegalArgumentException("qual must be >= 0.0 but got " + qual);
+        Utils.validateArg( qual >= 0.0, () -> "qual must be >= 0.0 but got " + qual);
         return 1.0 - qualToErrorProb(qual);
     }
 
@@ -138,7 +138,7 @@ public final class QualityUtils {
      * @return a probability (0.0-1.0)
      */
     public static double qualToErrorProb(final double qual) {
-        if ( qual < 0.0 ) throw new IllegalArgumentException("qual must be >= 0.0 but got " + qual);
+        Utils.validateArg( qual >= 0.0, () -> "qual must be >= 0.0 but got " + qual);
         return Math.pow(10.0, qual / -10.0);
     }
 
@@ -188,8 +188,7 @@ public final class QualityUtils {
      * @return log of probability (0.0-1.0)
      */
     public static double qualToErrorProbLog10(final double qual) {
-        if ( qual < 0.0 ) throw new IllegalArgumentException("qual must be >= 0.0 but got " + qual);
-        if ( qual < 0.0 ) throw new IllegalArgumentException("qual must be >= 0.0 but got " + qual);
+        Utils.validateArg( qual >= 0.0, () -> "qual must be >= 0.0 but got " + qual);
         return qual / -10.0;
     }
 
@@ -225,7 +224,7 @@ public final class QualityUtils {
      * @return a quality score (0-maxQual)
      */
     public static byte errorProbToQual(final double errorRate, final byte maxQual) {
-        if ( ! MathUtils.goodProbability(errorRate) ) throw new IllegalArgumentException("errorRate must be good probability but got " + errorRate);
+        Utils.validateArg(MathUtils.goodProbability(errorRate), () -> "errorRate must be good probability but got " + errorRate);
         final double d = Math.round(-10.0*Math.log10(errorRate));
         return boundQual((int)d, maxQual);
     }
@@ -234,7 +233,7 @@ public final class QualityUtils {
      * @see #errorProbToQual(double, byte) with proper conversion of maxQual integer to a byte
      */
     public static byte errorProbToQual(final double prob, final int maxQual) {
-        if ( maxQual < 0 || maxQual > 255 ) throw new IllegalArgumentException("maxQual must be between 0-255 but got " + maxQual);
+        Utils.validateArg( maxQual >= 0 && maxQual <= 255, () -> "maxQual must be between 0-255 but got " + maxQual);
         return errorProbToQual(prob, (byte)(maxQual & 0xFF));
     }
 
@@ -269,7 +268,7 @@ public final class QualityUtils {
      * @return a phred-scaled quality score (0-maxQualScore) as a byte
      */
     public static byte trueProbToQual(final double trueProb, final byte maxQual) {
-        if ( ! MathUtils.goodProbability(trueProb) ) throw new IllegalArgumentException("trueProb must be good probability but got " + trueProb);
+        Utils.validateArg(MathUtils.goodProbability(trueProb), () -> "trueProb must be good probability but got " + trueProb);
         final double lp = Math.round(-10.0*MathUtils.log10OneMinusX(trueProb));
         return boundQual((int)lp, maxQual);
     }
@@ -278,7 +277,7 @@ public final class QualityUtils {
      * @see #trueProbToQual(double, byte) with proper conversion of maxQual to a byte
      */
     public static byte trueProbToQual(final double prob, final int maxQual) {
-        if ( maxQual < 0 || maxQual > 255 ) throw new IllegalArgumentException("maxQual must be between 0-255 but got " + maxQual);
+        Utils.validateArg( maxQual >= 0 && maxQual <= 255, () -> "maxQual must be between 0-255 but got " + maxQual);
         return trueProbToQual(prob, (byte)(maxQual & 0xFF));
     }
 
@@ -323,6 +322,20 @@ public final class QualityUtils {
                 IllegalArgumentException("errorRateLog10 must be good probability but got " + errorRateLog10);
         // abs is necessary for edge base with errorRateLog10 = 0 producing -0.0 doubles
         return Math.abs(-10.0 * Math.max(errorRateLog10, MIN_LOG10_SCALED_QUAL));
+    }
+
+    /**
+     * Convert a log10 probability of being right to a phred-scaled quality score of being wrong as a double
+     *
+     * This is a very generic method, that simply computes a phred-scaled double quality
+     * score given an error rate.  It has the same precision as a normal double operation
+     *
+     * @param trueRateLog10 the log10 probability of being right (0.0-1.0).  Can be -Infinity to indicate
+     *                      that the result is impossible in which MIN_PHRED_SCALED_QUAL is returned
+     * @return a phred-scaled version of the error rate implied by trueRate
+     */
+    public static double phredScaleLog10CorrectRate(final double trueRateLog10) {
+        return phredScaleCorrectRate(Math.pow(10.0, trueRateLog10));
     }
 
     // ----------------------------------------------------------------------

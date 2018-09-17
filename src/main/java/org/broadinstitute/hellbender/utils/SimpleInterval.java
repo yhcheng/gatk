@@ -1,7 +1,11 @@
  package org.broadinstitute.hellbender.utils;
 
 
+import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.samtools.util.Locatable;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 
@@ -14,7 +18,6 @@ import java.io.Serializable;
  *@warning 0 length intervals are NOT currently allowed, but support may be added in the future
  */
 public final class SimpleInterval implements Locatable, Serializable {
-
     private static final long serialVersionUID = 1L;
     public static final char CONTIG_SEPARATOR = ':';
     public static final char START_END_SEPARATOR = '-';
@@ -54,10 +57,8 @@ public final class SimpleInterval implements Locatable, Serializable {
      *    end must be >= start
      * @throws IllegalArgumentException if it is invalid
      */
-    private static void validatePositions(final String contig, final int start, final int end) {
-        if (! isValid(contig, start, end)){
-            throw new IllegalArgumentException("Invalid interval. Contig:" + contig + " start:"+start + " end:" + end);
-        }
+    static void validatePositions(final String contig, final int start, final int end) {
+        Utils.validateArg(isValid(contig, start, end), () -> "Invalid interval. Contig:" + contig + " start:"+start + " end:" + end);
     }
 
      /**
@@ -135,12 +136,19 @@ public final class SimpleInterval implements Locatable, Serializable {
         this.end = end;
     }
 
-    /**
+     /**
+      * Parses a number like 100000 or 1,000,000 into an int. Throws NumberFormatException on parse failure.
+      */
+     static int parsePositionThrowOnFailure(final String pos) throws NumberFormatException {
+         return Integer.parseInt(pos.replaceAll(",", "")); //strip commas
+     }
+
+     /**
      * Parses a number like 100000 or 1,000,000 into an int.
      */
-    private static int parsePosition(final String pos) {
+    static int parsePosition(final String pos) {
         try {
-            return Integer.parseInt(pos.replaceAll(",", "")); //strip commas
+            return parsePositionThrowOnFailure(pos);
         } catch (NumberFormatException e){
             throw new UserException("Problem parsing start/end value in interval string. Value was: " + pos, e);
         }
@@ -168,17 +176,19 @@ public final class SimpleInterval implements Locatable, Serializable {
 
     @Override
     public String toString() {
-        return String.format("%s:%s-%s", contig, start, end);
+        return IntervalUtils.locatableToString(this);
     }
 
-    /**
+     /**
      * @return name of the contig this is mapped to
      */
+    @Override
     public String getContig(){
         return contig;
     }
 
     /** Gets the 1-based start position of the interval on the contig. */
+    @Override
     public int getStart(){
         return start;
     }
@@ -191,6 +201,7 @@ public final class SimpleInterval implements Locatable, Serializable {
     /**
      * @return the 1-based closed-ended end position of the interval on the contig.
      */
+    @Override
     public int getEnd(){
         return end;
     }
@@ -222,10 +233,15 @@ public final class SimpleInterval implements Locatable, Serializable {
       * This is the same as plain overlaps if margin=0.
       *
       * @param other interval to check
-      * @param margin how many bases may be between the two interval for us to still consider them overlapping.
+      * @param margin how many bases may be between the two interval for us to still consider them overlapping; must be non-negative
       * @return true if this interval overlaps other, otherwise false
+      * @throws IllegalArgumentException if margin is negative
       */
      public boolean overlapsWithMargin(final Locatable other, final int margin) {
+         if ( margin < 0 ) {
+             throw new IllegalArgumentException("given margin is negative: " + margin +
+                     "\tfor this: " + toString() + "\tand that: " + (other == null ? "other is null" : other.toString()));
+         }
          if ( other == null || other.getContig() == null ) {
              return false;
          }
@@ -252,10 +268,9 @@ public final class SimpleInterval implements Locatable, Serializable {
      /**
       * Returns the intersection of the two intervals. The intervals must overlap or IllegalArgumentException will be thrown.
       */
-     public SimpleInterval intersect( final Locatable that ) throws GATKException {
-         if (!this.overlaps(that)) {
-             throw new IllegalArgumentException("SimpleInterval::intersect(): The two intervals need to overlap " + this + " " + that);
-         }
+     public SimpleInterval intersect( final Locatable that ) {
+         Utils.validateArg(this.overlaps(that), () ->
+                 "SimpleInterval::intersect(): The two intervals need to overlap " + this + " " + that);
 
          return new SimpleInterval(getContig(),
                  Math.max(getStart(), that.getStart()),
@@ -266,7 +281,7 @@ public final class SimpleInterval implements Locatable, Serializable {
       * Returns a new SimpleInterval that represents the entire span of this and that.  Requires that
       * this and that SimpleInterval are contiguous.
       */
-     public SimpleInterval mergeWithContiguous( final Locatable that ) throws GATKException {
+     public SimpleInterval mergeWithContiguous( final Locatable that ) {
          Utils.nonNull(that);
          if (!this.contiguous(that)) {
              throw new GATKException("The two intervals need to be contiguous: " + this + " " + that);
@@ -277,8 +292,53 @@ public final class SimpleInterval implements Locatable, Serializable {
                  Math.max( getEnd(), that.getEnd()) );
      }
 
+     /**
+      * Returns a new SimpleInterval that represents the region between the endpoints of this and other.
+      *
+      * Unlike {@link #mergeWithContiguous}, the two intervals do not need to be contiguous
+      *
+      * @param other the other interval with which to calculate the span
+      * @return a new SimpleInterval that represents the region between the endpoints of this and other.
+      */
+     public SimpleInterval spanWith( final Locatable other ) {
+         Utils.nonNull(other);
+         Utils.validateArg(this.getContig().equals(other.getContig()), "Cannot get span for intervals on different contigs");
+         return new SimpleInterval(contig, Math.min(start, other.getStart()), Math.max(end, other.getEnd()));
+     }
+
      private boolean contiguous(final Locatable that) {
          Utils.nonNull(that);
          return this.getContig().equals(that.getContig()) && this.getStart() <= that.getEnd() + 1 && that.getStart() <= this.getEnd() + 1;
+     }
+
+     /**
+      * Returns a new SimpleInterval that represents this interval as expanded by the specified amount in both
+      * directions, bounded by the contig start/stop if necessary.
+      *
+      * @param padding amount to expand this interval
+      * @param contigLength length of this interval's contig
+      * @return a new SimpleInterval that represents this interval as expanded by the specified amount in both
+      *         directions, bounded by the contig start/stop if necessary.
+      */
+     public SimpleInterval expandWithinContig( final int padding, final int contigLength ) {
+         Utils.validateArg(padding >= 0, "padding must be >= 0");
+         return IntervalUtils.trimIntervalToContig(contig, start - padding, end + padding, contigLength);
+     }
+
+     /**
+      * Returns a new SimpleInterval that represents this interval as expanded by the specified amount in both
+      * directions, bounded by the contig start/stop if necessary.
+      *
+      * @param padding amount to expand this interval
+      * @param sequenceDictionary dictionary to use to determine the length of this interval's contig
+      * @return a new SimpleInterval that represents this interval as expanded by the specified amount in both
+      *         directions, bounded by the contig start/stop if necessary.
+      */
+     public SimpleInterval expandWithinContig( final int padding, final SAMSequenceDictionary sequenceDictionary ) {
+         Utils.nonNull(sequenceDictionary);
+         final SAMSequenceRecord contigRecord = sequenceDictionary.getSequence(contig);
+         Utils.nonNull( contigRecord, () -> "Contig " + contig + " not found in provided dictionary");
+
+         return expandWithinContig(padding, contigRecord.getSequenceLength());
      }
  }

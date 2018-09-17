@@ -97,7 +97,7 @@ public final class FragmentCollection<T> {
                     nameMap.remove(readName);
                 } else {
                     if ( nameMap == null ) {
-                        nameMap = new HashMap<>(nElements); // lazy init
+                        nameMap = new LinkedHashMap<>(nElements); // lazy init
                     }
                     nameMap.put(readName, p);
                 }
@@ -126,7 +126,7 @@ public final class FragmentCollection<T> {
         if ( rbp == null ) {
             throw new IllegalArgumentException("Pileup cannot be null");
         }
-        return create(rbp, rbp.size(), pileup -> pileup.getRead());
+        return create(rbp::sortedIterator, rbp.size(), pileup -> pileup.getRead());
     }
 
     /**

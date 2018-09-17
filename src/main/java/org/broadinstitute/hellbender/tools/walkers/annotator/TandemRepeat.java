@@ -1,10 +1,13 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.lang3.tuple.Pair;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
@@ -23,26 +26,27 @@ import java.util.*;
  * </ul>
  *
  */
-public final class TandemRepeat extends InfoFieldAnnotation {
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Tandem repeat unit composition and counts per allele (STR, RU, RPA)")
+public final class TandemRepeat extends InfoFieldAnnotation implements StandardMutectAnnotation {
 
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap) {
+                                        final ReadLikelihoods<Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( !vc.isIndel()) {
-            return null;
+            return Collections.emptyMap();
         }
 
-        final Pair<List<Integer>,byte[]> result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, ref.getForwardBases());
+        final Pair<List<Integer>,byte[]> result = GATKVariantContextUtils.getNumTandemRepeatUnits(vc, getRefBasesStartingAtVariantLocus(ref, vc));
         if (result == null) {
-            return null;
+            return Collections.emptyMap();
         }
 
         final byte[] repeatUnit = result.getRight();
         final List<Integer> numUnits = result.getLeft();
 
-        final Map<String, Object> map = new HashMap<>();
+        final Map<String, Object> map = new LinkedHashMap<>();
         map.put(GATKVCFConstants.STR_PRESENT_KEY, true);
         map.put(GATKVCFConstants.REPEAT_UNIT_KEY, new String(repeatUnit));
         map.put(GATKVCFConstants.REPEATS_PER_ALLELE_KEY, numUnits);
@@ -55,6 +59,12 @@ public final class TandemRepeat extends InfoFieldAnnotation {
                 GATKVCFConstants.STR_PRESENT_KEY,
                 GATKVCFConstants.REPEAT_UNIT_KEY,
                 GATKVCFConstants.REPEATS_PER_ALLELE_KEY);
+    }
+
+    private static byte[] getRefBasesStartingAtVariantLocus(final ReferenceContext ref, final VariantContext vc) {
+        final byte[] bases = ref.getBases();
+        final int startIndex = vc.getStart() - ref.getWindow().getStart();
+        return new String(bases).substring(startIndex).getBytes();
     }
 
 }

@@ -4,15 +4,15 @@ import htsjdk.tribble.Feature;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
-import org.broadinstitute.hellbender.cmdline.Argument;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.CommandLineProgram;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
-import org.broadinstitute.hellbender.cmdline.programgroups.QCProgramGroup;
+import org.broadinstitute.hellbender.cmdline.TestProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.FeatureManager;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -21,7 +21,7 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.util.*;
 
-public final class VariantOverlapAnnotatorUnitTest extends BaseTest {
+public final class VariantOverlapAnnotatorUnitTest extends GATKBaseTest {
 
     private VariantContext makeVC(final String source, final String id, final List<String> alleles) {
         final VariantContext vc = GATKVariantContextUtils.makeFromAlleles(source, "20", 10, alleles);
@@ -29,10 +29,10 @@ public final class VariantOverlapAnnotatorUnitTest extends BaseTest {
     }
 
     private VariantOverlapAnnotator makeAnnotator(final File file, final String dbSNP, final String... overlaps) {
-        final FeatureInput<VariantContext> dbSNPBinding = dbSNP == null ? null : new FeatureInput<>(dbSNP, Collections.emptyMap(), file);
+        final FeatureInput<VariantContext> dbSNPBinding = dbSNP == null ? null : new FeatureInput<>(file.getAbsolutePath(), dbSNP, Collections.emptyMap());
         final Map<FeatureInput<VariantContext>, String> overlapBinding = new LinkedHashMap<>();
         for ( final String overlap : overlaps ) {
-            overlapBinding.put(new FeatureInput<>(overlap, Collections.emptyMap(), file), overlap);
+            overlapBinding.put(new FeatureInput<>(file.getAbsolutePath(), overlap, Collections.emptyMap()), overlap);
         }
         if (overlapBinding.isEmpty()) {                     //to test both constructors
             return new VariantOverlapAnnotator(dbSNPBinding);
@@ -43,11 +43,11 @@ public final class VariantOverlapAnnotatorUnitTest extends BaseTest {
 
     @Test
     public void testCreateWithSpecialNames() {
-        final File decoyFile= new File("fred");
+        final String decoyPath= "fred";
         final List<String> names = Arrays.asList("X", "Y", "Z");
         final Map<FeatureInput<VariantContext>, String> overlapBinding = new LinkedHashMap<>();
         for ( final String overlap : names ) {
-            overlapBinding.put(new FeatureInput<>(overlap + "Binding", Collections.emptyMap(), decoyFile), overlap);
+            overlapBinding.put(new FeatureInput<>(decoyPath, overlap + "Binding", Collections.emptyMap()), overlap);
         }
         final VariantOverlapAnnotator annotator = new VariantOverlapAnnotator(null, overlapBinding);
         Assert.assertEquals(annotator.getOverlapNames(), names);
@@ -131,7 +131,7 @@ public final class VariantOverlapAnnotatorUnitTest extends BaseTest {
         Assert.assertEquals(annotated, toAnnotate);
     }
 
-    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup=QCProgramGroup.class)
+    @CommandLineProgramProperties(summary = "", oneLineSummary = "", programGroup=TestProgramGroup.class)
     private static class ArtificialFeatureContainingCommandLineProgram_ForVariantOverlap extends CommandLineProgram {
         @Argument(fullName = "dbsnp", shortName = "f")
         FeatureInput<Feature> featureArgument;
@@ -140,8 +140,8 @@ public final class VariantOverlapAnnotatorUnitTest extends BaseTest {
         FeatureInput<Feature> binding;
 
         public ArtificialFeatureContainingCommandLineProgram_ForVariantOverlap(File f) {
-            featureArgument = new FeatureInput<>("dbsnp", Collections.emptyMap(), f);
-            binding = new FeatureInput<>("binding", Collections.emptyMap(), f);
+            featureArgument = new FeatureInput<>(f.getAbsolutePath(), "dbsnp", Collections.emptyMap());
+            binding = new FeatureInput<>(f.getAbsolutePath(), "binding", Collections.emptyMap());
         }
 
         @Override

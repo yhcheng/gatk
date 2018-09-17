@@ -4,7 +4,7 @@ import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.utils.samples.Sample;
 import org.broadinstitute.hellbender.utils.samples.Sex;
 import org.broadinstitute.hellbender.utils.samples.Trio;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.testng.Assert;
@@ -13,7 +13,7 @@ import org.testng.annotations.Test;
 
 import java.util.*;
 
-public final class PossibleDeNovoUnitTest extends BaseTest {
+public final class PossibleDeNovoUnitTest extends GATKBaseTest {
 
     private static final int GQ30 = 30;
 
@@ -139,7 +139,7 @@ public final class PossibleDeNovoUnitTest extends BaseTest {
         final List<String> sampleNamesInOrder=Arrays.asList("mom", "dad", "child");
         final GenotypesContext context = GenotypesContext.create(genotypes, sampleNameToOffset, sampleNamesInOrder);
 
-        final Collection<Allele> alleles= new HashSet<>(2);
+        final Collection<Allele> alleles= new LinkedHashSet<>(2);
         alleles.addAll(gMom.getAlleles());
         alleles.addAll(gDad.getAlleles());
         alleles.addAll(gChild.getAlleles());
@@ -163,6 +163,6 @@ public final class PossibleDeNovoUnitTest extends BaseTest {
         Assert.assertEquals(ann.getKeyNames(), Arrays.asList(GATKVCFConstants.HI_CONF_DENOVO_KEY, GATKVCFConstants.LO_CONF_DENOVO_KEY));
 
         final Map<String, Object> resultNoTrio = new PossibleDeNovo(Collections.emptySet(), 0).annotate(null, vc, null);
-        Assert.assertNull(resultNoTrio);
+        Assert.assertTrue(resultNoTrio.isEmpty());
     }
 }

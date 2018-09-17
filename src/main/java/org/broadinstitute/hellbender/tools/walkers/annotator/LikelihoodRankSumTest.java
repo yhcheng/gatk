@@ -1,8 +1,12 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.vcf.VCFInfoHeaderLine;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.MostLikelyAllele;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
@@ -23,27 +27,31 @@ import java.util.OptionalDouble;
  * <p>The read position rank sum test can not be calculated for sites without a mixture of reads showing both the reference and alternate alleles.</p>
  *
  */
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Rank sum test of per-read likelihoods of REF versus ALT reads (LikelihoodRankSum)")
 public final class LikelihoodRankSumTest extends RankSumTest {
 
     @Override
     public List<String> getKeyNames() { return Collections.singletonList(GATKVCFConstants.LIKELIHOOD_RANK_SUM_KEY); }
 
     @Override
-    public List<VCFInfoHeaderLine> getDescriptions() { return Collections.singletonList(GATKVCFHeaderLines.getInfoLine(getKeyNames().get(0))); }
-
-    @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc, final MostLikelyAllele mostLikelyAllele) {
+    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc, final ReadLikelihoods<Allele>.BestAllele bestAllele) {
         Utils.nonNull(read, "read is null");
-        Utils.nonNull(mostLikelyAllele, "mostLikelyAllele is null");
-        if ( ! mostLikelyAllele.isInformative() ) {
-            throw new IllegalStateException("Should never see a non-informative allele for read " + read + " MostLikelyAllele " + mostLikelyAllele);
+        Utils.nonNull(bestAllele, "mostLikelyAllele is null");
+        if ( ! bestAllele.isInformative() ) {
+            throw new IllegalStateException("Should never see a non-informative allele for read " + read + " BestAllele " + bestAllele);
         }
-        return OptionalDouble.of(mostLikelyAllele.getLog10LikelihoodOfMostLikely());
+        return OptionalDouble.of(bestAllele.likelihood);
+    }
+    
+    @Override
+    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
+        // todo its possible this should throw, as This method should never have been called as getElementForRead(read,refloc,mostLikelyAllele) was overriden
+        return OptionalDouble.empty();
     }
 
     @Override
-    protected OptionalDouble getElementForRead(final GATKRead read, final int refLoc) {
-        Utils.nonNull(read);
-        throw new IllegalStateException("This method should never have been called as getElementForRead(read,refloc,mostLikelyAllele) was overriden");
+    protected OptionalDouble getElementForPileupElement(final PileupElement p, final int refLoc) {
+        // todo its possible this should throw, as This method should never have been called as getElementForRead(read,refloc,mostLikelyAllele) was overriden
+        return OptionalDouble.empty();
     }
 }

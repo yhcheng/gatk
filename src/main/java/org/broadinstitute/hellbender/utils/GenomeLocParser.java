@@ -7,9 +7,13 @@ import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Factory class for creating GenomeLocs
@@ -64,11 +68,10 @@ public final class GenomeLocParser {
      * @param validationLevel how much validation should we do of the genome locs at runtime? Purely for testing purposes
      */
     protected GenomeLocParser(SAMSequenceDictionary seqDict, final ValidationLevel validationLevel) {
-        if (validationLevel == null)
-            throw new IllegalArgumentException("validation level cannot be null");
+        Utils.nonNull(validationLevel, "validation level cannot be null");
         if (seqDict == null) { // we couldn't load the reference dictionary
             //logger.info("Failed to load reference dictionary, falling back to lexicographic order for contigs");
-            throw new UserException.CommandLineException("Failed to load reference dictionary");
+            throw new CommandLineException("Failed to load reference dictionary");
         }
 
         this.validationLevel = validationLevel;
@@ -235,8 +238,14 @@ public final class GenomeLocParser {
                     vglHelper(String.format("The stop position %d is less than 1", stop));
 
                 final int contigSize = contigInfo.getSequenceLength();
-                if (start > contigSize || stop > contigSize)
+                if (contigSize == SAMSequenceRecord.UNKNOWN_SEQUENCE_LENGTH) {
+                    logger.warn(String.format("The available sequence dictionary does not contain a sequence length for contig (%s). " +
+                            "Skipping validation of the genome loc end coordinate (%d).",
+                            contig, stop));
+                }
+                else if (start > contigSize || stop > contigSize) {
                     vglHelper(String.format("The genome loc coordinates %d-%d exceed the contig size (%d)", start, stop, contigSize));
+                }
             }
 
             return contigInfo.getSequenceName();
@@ -289,15 +298,16 @@ public final class GenomeLocParser {
      *
      */
     public GenomeLoc parseGenomeLoc(final String str) {
-        // 'chr2', 'chr2:1000000' or 'chr2:1,000,000-2,000,000'
-        //System.out.printf("Parsing location '%s'%n", str);
-
         try {
             if ( isUnmappedGenomeLocString(str) ) {
                 return GenomeLoc.UNMAPPED;
             }
 
-            final Locatable locatable = new SimpleInterval(str);
+            // Get a list of all possible valid intervals for this query by resolving the query against the sequence
+            // dictionary. Throw if there is an ambiguity, otherwise get the unique interval from the list.
+            final List<SimpleInterval> allResolvedIntervals = IntervalUtils.getResolvedIntervals(str, contigInfo.getDictionary());
+            final Locatable locatable = getUnambiguousInterval(str, allResolvedIntervals);
+
             final String contig = locatable.getContig();
             final int start = locatable.getStart();
             int stop = locatable.getEnd();
@@ -312,8 +322,42 @@ public final class GenomeLocParser {
             }
 
             return createGenomeLoc(contig, getContigIndex(contig), start, stop, true);
-        } catch (IllegalArgumentException | UserException e){
-            throw new UserException.MalformedGenomeLoc("Failed to parse Genome Location string: " + str, e);
+        } catch (UserException.MalformedGenomeLoc e) {
+            throw e;
+        } catch (IllegalArgumentException | UserException e) {
+            throw new UserException.MalformedGenomeLoc("Failed to parse Genome Location string: " + str + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Given a (possibly empty) list of valid intervals that have been resolved from a query interval against a
+     * sequence dictionary by {@link #parseGenomeLoc}, throw if there are 0, or more than 1, valid intervals in the
+     * list, otherwise return the single interval to be used.
+     * @param intervalQueryString may not be null
+     * @param allResolvedIntervals may not be null
+     * @return A single, valid, unambiguous interval
+     * @throws UserException.MalformedGenomeLoc if the interval cannot be resolved, or is ambiguous.
+     */
+    static SimpleInterval getUnambiguousInterval(
+            final String intervalQueryString,
+            final List<SimpleInterval> allResolvedIntervals)
+    {
+        Utils.nonNull(intervalQueryString);
+        Utils.nonNull(allResolvedIntervals);
+
+        if (allResolvedIntervals.isEmpty()) {
+            throw new UserException.MalformedGenomeLoc(
+                    String.format("Query interval \"%s\" is not valid for this input.", intervalQueryString));
+        } else if (allResolvedIntervals.size() > 1) {
+            throw new UserException.MalformedGenomeLoc(
+                    String.format(
+                            "The query interval \"%s\" is ambiguous and can be interpreted as a query against more than one contig: \"%s\". " +
+                                    "The ambiguity can be resolved by providing the interval in a BED file (using zero-based, half-open coordinates).",
+                            intervalQueryString,
+                            allResolvedIntervals.stream().map(f -> f.getContig()).collect(Collectors.joining(" or "))
+                    ));
+        } else {
+            return allResolvedIntervals.get(0);
         }
     }
 
@@ -324,7 +368,6 @@ public final class GenomeLocParser {
     public static boolean isUnmappedGenomeLocString(final String str) {
         return str != null && str.trim().equalsIgnoreCase(UNMAPPED_LOC_NAME);
     }
-
 
     // --------------------------------------------------------------------------------------------------------------
     //
@@ -360,9 +403,7 @@ public final class GenomeLocParser {
      * @return never {@code null}.
      */
     public GenomeLoc createGenomeLoc(final Locatable locatable) {
-        if (locatable == null) {
-            throw new IllegalArgumentException("the input locatable cannot be null");
-        }
+        Utils.nonNull(locatable, "the input locatable cannot be null");
         return createGenomeLoc(locatable.getContig(), locatable.getStart(), locatable.getEnd());
     }
 

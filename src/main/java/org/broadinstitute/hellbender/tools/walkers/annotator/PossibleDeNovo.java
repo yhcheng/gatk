@@ -1,10 +1,15 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.logging.OneShotLogger;
 import org.broadinstitute.hellbender.utils.samples.MendelianViolation;
 import org.broadinstitute.hellbender.utils.samples.Trio;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -32,24 +37,23 @@ import java.util.*;
  * </ul>
  *
  */
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Existence of a de novo mutation in at least one of the given families (hiConfDeNovo, loConfDeNovo)")
 public final class PossibleDeNovo extends InfoFieldAnnotation {
 
     public PossibleDeNovo(final Set<Trio> trios, final double minGenotypeQualityP) {
-        this.trios = Collections.unmodifiableSet(new HashSet<>(trios));
-        if ( trios.isEmpty() ) {
-            PossibleDeNovo.logger.warn("Annotation will not be calculated, must provide a valid PED file (-ped) from the command line.");
-        }
+        this.trios = Collections.unmodifiableSet(new LinkedHashSet<>(trios));
         mendelianViolation = new MendelianViolation(minGenotypeQualityP);
     }
 
     /**
-     * This is dummy constructor that will do nothing until https://github.com/broadinstitute/gatk/issues/1468 is fixed
+     * This is dummy constructor that will do nothing until https://github.com/broadinstitute/gatk/issues/1880 is addressed
      */
     public PossibleDeNovo(){
         this(Collections.emptySet(), 0);
     }
 
-    private static final Logger logger = Logger.getLogger(PossibleDeNovo.class);
+    protected final OneShotLogger warning = new OneShotLogger(this.getClass());
+
 
     private static final int hi_GQ_threshold = 20; //WARNING - If you change this value, update the description in GATKVCFHeaderLines
     private static final int lo_GQ_threshold = 10; //WARNING - If you change this value, update the description in GATKVCFHeaderLines
@@ -67,10 +71,11 @@ public final class PossibleDeNovo extends InfoFieldAnnotation {
     @Override
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap) {
+                                        final ReadLikelihoods<Allele> likelihoods) {
         Utils.nonNull(vc);
         if (trios.isEmpty()){
-            return null;
+            warning.warn("Annotation will not be calculated, must provide a valid PED file (-ped) from the command line.");
+            return Collections.emptyMap();
         }
         final List<String> highConfDeNovoChildren = new ArrayList<>();
         final List<String> lowConfDeNovoChildren = new ArrayList<>();
@@ -96,7 +101,7 @@ public final class PossibleDeNovo extends InfoFieldAnnotation {
         final double AFcutoff = Math.max(flatNumberOfSamplesCutoff, percentNumberOfSamplesCutoff);
         final int deNovoAlleleCount = vc.getCalledChrCount(vc.getAlternateAllele(0)); //we assume we're biallelic above so use the first alt
 
-        final Map<String,Object> attributeMap = new HashMap<>(2);
+        final Map<String,Object> attributeMap = new LinkedHashMap<>(2);
         if ( !highConfDeNovoChildren.isEmpty()  && deNovoAlleleCount < AFcutoff ) {
             attributeMap.put(GATKVCFConstants.HI_CONF_DENOVO_KEY, highConfDeNovoChildren);
         }
@@ -111,8 +116,9 @@ public final class PossibleDeNovo extends InfoFieldAnnotation {
         final String dad = trio.getPaternalID();
         final String kid = trio.getChildID();
 
-      return  !mom.isEmpty()  && vc.hasGenotype(mom) && vc.getGenotype(mom).hasLikelihoods()
-           && !dad.isEmpty()  && vc.hasGenotype(dad) && vc.getGenotype(dad).hasLikelihoods()
-           && !kid.isEmpty()  && vc.hasGenotype(kid) && vc.getGenotype(kid).hasLikelihoods();
+        return   (!mom.isEmpty() && vc.hasGenotype(mom) && vc.getGenotype(mom).hasLikelihoods())
+              && (!dad.isEmpty() && vc.hasGenotype(dad) && vc.getGenotype(dad).hasLikelihoods())
+              && (!kid.isEmpty() && vc.hasGenotype(kid) && vc.getGenotype(kid).hasLikelihoods());
     }
+
 }

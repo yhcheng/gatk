@@ -1,10 +1,10 @@
 package org.broadinstitute.hellbender.tools.examples;
 
 import htsjdk.variant.variantcontext.VariantContext;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import org.broadinstitute.hellbender.cmdline.programgroups.ExampleProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.ReadWalker;
@@ -24,7 +24,8 @@ import java.util.List;
 @CommandLineProgramProperties(
         summary = "Prints reads from the provided file(s) along with overlapping variants (if a source of variants is provided) to the specified output file (or STDOUT if none specified)",
         oneLineSummary = "Print reads with overlapping variants",
-        programGroup = ReadProgramGroup.class
+        programGroup = ExampleProgramGroup.class,
+        omitFromCommandLine = true
 )
 public final class ExampleReadWalkerWithVariants extends ReadWalker {
 
@@ -83,10 +84,9 @@ public final class ExampleReadWalkerWithVariants extends ReadWalker {
     }
 
     @Override
-    public Object onTraversalSuccess() {
-        if ( outputStream != null )
+    public void closeTool() {
+        if ( outputStream != null ) {
             outputStream.close();
-
-        return null;
+        }
     }
 }

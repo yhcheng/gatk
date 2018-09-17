@@ -1,31 +1,42 @@
 package org.broadinstitute.hellbender.engine.spark;
 
-import com.google.cloud.dataflow.sdk.transforms.SerializableFunction;
-import com.google.cloud.genomics.dataflow.utils.GCSOptions;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.variant.vcf.VCFHeaderLine;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.ArgumentCollection;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.ArgumentCollection;
+import org.broadinstitute.barclay.argparser.CommandLinePluginDescriptor;
+import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationPluginDescriptor;
+import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKReadFilterPluginDescriptor;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.*;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceWindowFunctions;
+import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.engine.FeatureManager;
+import org.broadinstitute.hellbender.engine.GATKTool;
+import org.broadinstitute.hellbender.engine.TraversalParameters;
+import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceMultiSparkSource;
+import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceWindowFunctions;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSink;
 import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSource;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.utils.SequenceDictionaryUtils;
+import org.broadinstitute.hellbender.utils.SerializableFunction;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadsWriteFormat;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 
 import java.io.IOException;
-import java.util.List;
+import java.time.ZonedDateTime;
+import java.util.*;
 
 /**
  * Base class for GATK spark tools that accept standard kinds of inputs (reads, reference, and/or intervals).
@@ -43,7 +54,7 @@ import java.util.List;
  *  as appropriate to indicate required inputs.
  *
  * -Tools can query whether certain inputs are present via {@link #hasReference}, {@link #hasReads}, and
- *  {@link #hasIntervals}.
+ *  {@link #hasUserSuppliedIntervals}.
  *
  * -Tools can load the reads via {@link #getReads}, access the reference via {@link #getReference}, and
  *  access the intervals via {@link #getIntervals}. Any intervals specified are automatically applied
@@ -55,7 +66,12 @@ import java.util.List;
  *  reference source returned by {@link #getReference}.
  */
 public abstract class GATKSparkTool extends SparkCommandLineProgram {
-    private static final long serialVersionUID = 1l;
+    private static final long serialVersionUID = 1L;
+
+    public static final String BAM_PARTITION_SIZE_LONG_NAME = "bam-partition-size";
+    public static final String NUM_REDUCERS_LONG_NAME = "num-reducers";
+    public static final String SHARDED_OUTPUT_LONG_NAME = "sharded-output";
+    public static final String OUTPUT_SHARD_DIR_LONG_NAME = "output-shard-tmp-dir";
 
     @ArgumentCollection
     public final ReferenceInputArgumentCollection referenceArguments = requiresReference() ? new RequiredReferenceInputArgumentCollection() :  new OptionalReferenceInputArgumentCollection();
@@ -69,25 +85,54 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     @Argument(doc = "maximum number of bytes to read from a file into each partition of reads. " +
             "Setting this higher will result in fewer partitions. Note that this will not be equal to the size of the partition in memory. " +
             "Defaults to 0, which uses the default split size (determined by the Hadoop input format, typically the size of one HDFS block).",
-            fullName = "bamPartitionSize", shortName = "bps", optional = true)
+            fullName = BAM_PARTITION_SIZE_LONG_NAME,
+            optional = true)
     protected long bamPartitionSplitSize = 0;
 
-    @Argument(fullName = "disableSequenceDictionaryValidation", shortName = "disableSequenceDictionaryValidation", doc = "If specified, do not check the sequence dictionaries from our inputs for compatibility. Use at your own risk!", optional = true)
-    private boolean disableSequenceDictionaryValidation = false;
 
-    @Argument(doc = "For tools that write an output, write the output in multiple pieces (shards)", shortName = "shardedOutput", fullName = "shardedOutput", optional = true)
+    @ArgumentCollection
+    protected SequenceDictionaryValidationArgumentCollection sequenceDictionaryValidationArguments = getSequenceDictionaryValidationArgumentCollection();
+
+    @Argument(fullName = StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, shortName = StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, doc = "If true, adds a command line header line to created VCF files.", optional=true, common = true)
+    public boolean addOutputVCFCommandLine = true;
+
+    @Argument(doc = "For tools that write an output, write the output in multiple pieces (shards)",
+            fullName = SHARDED_OUTPUT_LONG_NAME,
+            optional = true,
+            mutex = {OUTPUT_SHARD_DIR_LONG_NAME})
     protected boolean shardedOutput = false;
 
+    @Argument(doc = "when writing a bam, in single sharded mode this directory to write the temporary intermediate output shards, if not specified .parts/ will be used",
+            fullName = OUTPUT_SHARD_DIR_LONG_NAME,
+            optional = true,
+            mutex = {SHARDED_OUTPUT_LONG_NAME})
+    protected String shardedPartsDir = null;
+
     @Argument(doc="For tools that shuffle data or write an output, sets the number of reducers. Defaults to 0, which gives one partition per 10MB of input.",
-            shortName = "numReducers", fullName = "numReducers", optional = true)
+            fullName = NUM_REDUCERS_LONG_NAME,
+            optional = true)
     protected int numReducers = 0;
 
     private ReadsSparkSource readsSource;
     private SAMFileHeader readsHeader;
     private String readInput;
-    private ReferenceMultiSource referenceSource;
+    private ReferenceMultiSparkSource referenceSource;
     private SAMSequenceDictionary referenceDictionary;
-    private List<SimpleInterval> intervals;
+    private List<SimpleInterval> userIntervals;
+    protected FeatureManager features;
+
+    /**
+     * Return the list of GATKCommandLinePluginDescriptor objects to be used for this CLP.
+     * Use the read filter plugin.
+     */
+    @Override
+    public List<? extends CommandLinePluginDescriptor<?>> getPluginDescriptors() {
+        GATKReadFilterPluginDescriptor readFilterDescriptor = new GATKReadFilterPluginDescriptor(getDefaultReadFilters());
+        return useVariantAnnotations()?
+                Arrays.asList(readFilterDescriptor, new GATKAnnotationPluginDescriptor(
+                        getDefaultVariantAnnotations(), getDefaultVariantAnnotationGroups())):
+                Collections.singletonList(readFilterDescriptor);
+    }
 
     /**
      * Does this tool require reference data? Tools that do should override to return true.
@@ -139,8 +184,8 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      *
      * @return true if intervals are available, otherwise false
      */
-    public final boolean hasIntervals() {
-        return intervals != null;
+    public final boolean hasUserSuppliedIntervals() {
+        return userIntervals != null;
     }
 
     /**
@@ -153,6 +198,14 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      */
     public SerializableFunction<GATKRead, SimpleInterval> getReferenceWindowFunction() {
         return ReferenceWindowFunctions.IDENTITY_FUNCTION;
+    }
+
+    /**
+     * subclasses can override this to provide different default behavior for sequence dictionary validation
+     * @return a SequenceDictionaryValidationArgumentCollection
+     */
+    protected SequenceDictionaryValidationArgumentCollection getSequenceDictionaryValidationArgumentCollection() {
+        return new SequenceDictionaryValidationArgumentCollection.StandardValidationCollection();
     }
 
     /**
@@ -205,10 +258,19 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * @return all reads from our reads input(s) as a {@link JavaRDD}, bounded by intervals if specified, and unfiltered.
      */
     public JavaRDD<GATKRead> getUnfilteredReads() {
+        TraversalParameters traversalParameters;
+        if ( intervalArgumentCollection.intervalsSpecified() ) {
+            traversalParameters = intervalArgumentCollection.getTraversalParameters(getHeaderForReads().getSequenceDictionary());
+        } else if ( hasUserSuppliedIntervals() ) { // intervals may have been supplied by editIntervals
+            traversalParameters = new TraversalParameters(getIntervals(), false);
+        } else {
+            traversalParameters = null; // no intervals were specified so return all reads (mapped and unmapped)
+        }
+
         // TODO: This if statement is a temporary hack until #959 gets resolved.
         if (readInput.endsWith(".adam")) {
             try {
-                return readsSource.getADAMReads(readInput, intervals, getHeaderForReads());
+                return readsSource.getADAMReads(readInput, traversalParameters, getHeaderForReads());
             } catch (IOException e) {
                 throw new UserException("Failed to read ADAM file " + readInput, e);
             }
@@ -217,9 +279,8 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
             if (hasCramInput() && !hasReference()){
                 throw new UserException.MissingReference("A reference file is required when using CRAM files.");
             }
-            final String refPath = hasReference() ?  referenceArguments.getReferenceFile().getAbsolutePath() : null;
-            // If no intervals were specified (intervals == null), this will return all reads (mapped and unmapped)
-            return readsSource.getParallelReads(readInput, refPath, intervals, bamPartitionSplitSize);
+            final String refPath = hasReference() ?  referenceArguments.getReferenceFileName() : null;
+            return readsSource.getParallelReads(readInput, refPath, traversalParameters, bamPartitionSplitSize);
         }
     }
 
@@ -230,13 +291,24 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * @param reads reads to write.
      */
     public void writeReads(final JavaSparkContext ctx, final String outputFile, JavaRDD<GATKRead> reads) {
+        writeReads(ctx, outputFile, reads, readsHeader);
+    }
+
+    /**
+     * Writes the reads from a {@link JavaRDD} to an output file.
+     * @param ctx the JavaSparkContext to write.
+     * @param outputFile path to the output bam/cram.
+     * @param reads reads to write.
+     * @param header the header to write.
+     */
+    public void writeReads(final JavaSparkContext ctx, final String outputFile, JavaRDD<GATKRead> reads, SAMFileHeader header) {
         try {
             ReadsSparkSink.writeReads(ctx, outputFile,
-                    hasReference() ? referenceArguments.getReferenceFile().getAbsolutePath() : null,
-                    reads, readsHeader, shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE,
-                    getRecommendedNumReducers());
+                    hasReference() ? referenceArguments.getReferencePath().toAbsolutePath().toUri().toString() : null,
+                    reads, header, shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE,
+                    getRecommendedNumReducers(), shardedPartsDir);
         } catch (IOException e) {
-            throw new GATKException("unable to write bam: " + e);
+            throw new UserException.CouldNotCreateOutputFile(outputFile,"writing failed", e);
         }
     }
 
@@ -252,7 +324,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
         if (numReducers != 0) {
             return numReducers;
         }
-        return 1 + (int) (BucketUtils.dirSize(getReadSourceName(), null) / getTargetPartitionSize());
+        return 1 + (int) (BucketUtils.dirSize(getReadSourceName()) / getTargetPartitionSize());
     }
 
     /**
@@ -275,14 +347,89 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     }
 
     /**
-     * Returns the read filter (simple or composite) that will be applied to the reads returned from {@link #getReads}
-     * The default implementation uses the {@link org.broadinstitute.hellbender.engine.filters.WellformedReadFilter} filter with all default options.
+     * Returns a read filter (simple or composite) that can be applied to the reads returned from {@link #getReads}.
+     * This implementation combines the default read filters for this tool (returned by {@link #getDefaultReadFilters}
+     * along with any read filter command line directives specified by the user (such as enabling other filters or
+     * disabling default filters); and returns a single composite filter resulting from the list by and'ing them together.
      *
-     * Subclasses can extend to provide their own filters (ie., override and optionally call super).
-     * Multiple filters can be composed by using {@link org.broadinstitute.hellbender.engine.filters.ReadFilter} composition methods.
+     * NOTE: Most tools will not need to override the method, and should only do so in order to provide custom
+     * behavior or processing of the final merged read filter. To change the default read filters used by the tool,
+     * override {@link #getDefaultReadFilters} instead.
+     *
+     * Multiple filters can be composed by using {@link org.broadinstitute.hellbender.engine.filters.ReadFilter}
+     * composition methods.
      */
     public ReadFilter makeReadFilter() {
-        return new WellformedReadFilter(getHeaderForReads());
+        return makeReadFilter(getHeaderForReads());
+    }
+
+    /**
+     * Like {@link #makeReadFilter()} but with the ability to pass a different SAMFileHeader.
+     */
+    protected ReadFilter makeReadFilter(SAMFileHeader samFileHeader) {
+        final GATKReadFilterPluginDescriptor readFilterPlugin =
+                getCommandLineParser().getPluginDescriptor(GATKReadFilterPluginDescriptor.class);
+        return readFilterPlugin.getMergedReadFilter(samFileHeader);
+    }
+
+    /**
+     * Returns the default list of ReadFilters that are used for this tool. The filters returned
+     * by this method are subject to selective enabling/disabling by the user via the command line. The
+     * default implementation uses the {@link WellformedReadFilter} filter with all default options. Subclasses
+     * can override to provide alternative filters.
+     *
+     * Note: this method is called before command line parsing begins, and thus before a SAMFileHeader is
+     * available through {@link #getHeaderForReads}. The actual SAMFileHeader is propagated to the read filters
+     * by {@link #makeReadFilter} after the filters have been merged with command line arguments.
+     *
+     * @return List of individual filters to be applied for this tool.
+     */
+    public List<ReadFilter> getDefaultReadFilters() {
+        return Arrays.asList(new WellformedReadFilter());
+    }
+
+    /**
+     * @see GATKTool#useVariantAnnotations()
+     */
+    public boolean useVariantAnnotations() {
+        return false;
+    }
+
+    /**
+     * @see GATKTool#getDefaultVariantAnnotations()
+     */
+    public List<Annotation> getDefaultVariantAnnotations() {
+        return Collections.emptyList();
+    }
+
+    /**
+     * @see GATKTool#getDefaultVariantAnnotationGroups()
+     */
+    public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() {
+        return Collections.emptyList();
+    }
+
+    /**
+     * @return If addOutputVCFCommandLine is true, a set of VCF header lines containing the tool name, version,
+     * date and command line, otherwise an empty set.
+     */
+    protected Set<VCFHeaderLine> getDefaultToolVCFHeaderLines() {
+        if (addOutputVCFCommandLine) {
+            return GATKVariantContextUtils
+                    .getDefaultVCFHeaderLines(getToolkitShortName(), this.getClass().getSimpleName(),
+                            getVersion(), Utils.getDateTimeForDisplay((ZonedDateTime.now())), getCommandLine());
+        } else {
+            return new HashSet<>();
+        }
+    }
+
+    /**
+     * @see GATKTool#makeVariantAnnotations()
+     */
+    public Collection<Annotation> makeVariantAnnotations() {
+        final GATKAnnotationPluginDescriptor annotationPlugin =
+                getCommandLineParser().getPluginDescriptor(GATKAnnotationPluginDescriptor.class);
+        return annotationPlugin.getResolvedInstances();
     }
 
     /**
@@ -295,7 +442,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     /**
      * @return our reference source, or null if no reference is present
      */
-    public ReferenceMultiSource getReference() {
+    public ReferenceMultiSparkSource getReference() {
         return referenceSource;
     }
 
@@ -303,13 +450,13 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * @return our intervals, or null if no intervals were specified
      */
     public List<SimpleInterval> getIntervals() {
-        return intervals;
+        return userIntervals;
     }
 
     @Override
     protected void runPipeline( JavaSparkContext sparkContext ) {
         initializeToolInputs(sparkContext);
-        validateToolInputs();
+        validateSequenceDictionaries();
         runTool(sparkContext);
     }
 
@@ -319,6 +466,7 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
     private void initializeToolInputs(final JavaSparkContext sparkContext) {
         initializeReference();
         initializeReads(sparkContext); // reference must be initialized before reads
+        initializeFeatures();
         initializeIntervals();
     }
 
@@ -339,19 +487,35 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
         readsSource = new ReadsSparkSource(sparkContext, readArguments.getReadValidationStringency());
         readsHeader = readsSource.getHeader(
                 readInput,
-                hasReference() ?  referenceArguments.getReferenceFile().getAbsolutePath() : null,
-                getAuthHolder());
+                hasReference() ?  referenceArguments.getReferenceFileName() : null);
     }
 
     /**
      * Initializes our reference source. Does nothing if no reference was specified.
      */
     private void initializeReference() {
-        final GCSOptions gcsOptions = getAuthenticatedGCSOptions(); // null if we have no api key
         final String referenceURL = referenceArguments.getReferenceFileName();
         if ( referenceURL != null ) {
-            referenceSource = new ReferenceMultiSource(gcsOptions, referenceURL, getReferenceWindowFunction());
+            referenceSource = new ReferenceMultiSparkSource(referenceURL, getReferenceWindowFunction());
             referenceDictionary = referenceSource.getReferenceSequenceDictionary(readsHeader != null ? readsHeader.getSequenceDictionary() : null);
+            if (referenceDictionary == null) {
+                throw new UserException.MissingReferenceDictFile(referenceURL);
+            }
+        }
+    }
+
+    /**
+     * Initialize our source of Feature data (or set it to null if no Feature argument(s) were provided).
+     *
+     * Package-private so that engine classes can access it, but concrete tool child classes cannot.
+     * May be overridden by traversals that require custom initialization of Feature data sources.
+     *
+     * By default, this method initializes the FeatureManager to use the lookahead cache of {@link FeatureDataSource#DEFAULT_QUERY_LOOKAHEAD_BASES} bases.
+     */
+    void initializeFeatures() {
+        features = new FeatureManager(this);
+        if ( features.isEmpty() ) {  // No available sources of Features discovered for this tool
+            features = null;
         }
     }
 
@@ -366,15 +530,28 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
                 throw new UserException("We require at least one input source that has a sequence dictionary (reference or reads) when intervals are specified");
             }
 
-            intervals = intervalArgumentCollection.getIntervals(intervalDictionary);
+            userIntervals = intervalArgumentCollection.getIntervals(intervalDictionary);
         }
+        userIntervals = editIntervals(userIntervals);
+    }
+
+    /**
+     * Transform the intervals during loading.
+     *
+     * Developers can override this method to do custom interval handling during initialization of their GATKSparkTool
+     *
+     * @param rawIntervals Intervals specified on command line by user (-L).  Can be {@code null}
+     * @return Transformed set of intervals.  Allowed to return non-null, if null was specified in the input.
+     */
+    protected List<SimpleInterval> editIntervals(final List<SimpleInterval> rawIntervals) {
+        return rawIntervals;
     }
 
     /**
      * Validates standard tool inputs against each other.
      */
-    private void validateToolInputs() {
-        if ( ! disableSequenceDictionaryValidation ) {
+    protected void validateSequenceDictionaries() {
+        if ( sequenceDictionaryValidationArguments.performSequenceDictionaryValidation() ) {
             // Validate the reference sequence dictionary against the reads sequence dictionary, if both are present,
             // using standard GATK validation settings (requiring a common subset of equivalent contigs without respect
             // to ordering).
@@ -398,4 +575,5 @@ public abstract class GATKSparkTool extends SparkCommandLineProgram {
      * @param ctx our Spark context
      */
     protected abstract void runTool( JavaSparkContext ctx );
+
 }

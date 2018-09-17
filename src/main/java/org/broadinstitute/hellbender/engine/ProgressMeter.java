@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.engine;
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.Locatable;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -31,10 +32,10 @@ public final class ProgressMeter {
     public static final double DEFAULT_SECONDS_BETWEEN_UPDATES = 10.0;
 
     /**
-     * We check the current time every time we process this many records
-     * (to cut down on the number of system calls)
+     * We check the current time every time we process this many records,
+     * by default (to cut down on the number of system calls)
      */
-    public static final long RECORDS_BETWEEN_TIME_CHECKS = 1000l;
+    public static final long DEFAULT_RECORDS_BETWEEN_TIME_CHECKS = 1000L;
 
     /**
      * By default, we use this function to get the current time
@@ -44,41 +45,52 @@ public final class ProgressMeter {
     /**
      * Number of milliseconds in a second
      */
-    public static final long MILLISECONDS_PER_SECOND = 1000l;
+    public static final long MILLISECONDS_PER_SECOND = 1000L;
 
     /**
      * Number of milliseconds in a minute
      */
-    public static final long MILLISECONDS_PER_MINUTE = MILLISECONDS_PER_SECOND * 60l;
+    public static final long MILLISECONDS_PER_MINUTE = MILLISECONDS_PER_SECOND * 60L;
+
+    /**
+     * Default label for records in logger messages. For display purposes only.
+     */
+    public static final String DEFAULT_RECORD_LABEL = "records";
 
     /**
      * We output a line to the logger after this many seconds have elapsed
      */
-    private final double secondsBetweenUpdates;
+    private double secondsBetweenUpdates;
+
+    /**
+     * We check the current time every time we process this many records
+     * (to cut down on the number of system calls)
+     */
+    private long recordsBetweenTimeChecks = DEFAULT_RECORDS_BETWEEN_TIME_CHECKS;
 
     /**
      * Total records processed
      */
-    private long numRecordsProcessed = 0l;
+    private long numRecordsProcessed = 0L;
 
     /**
      * Our start timestamp in milliseconds as returned by our {@link #timeFunction}
      */
-    private long startTimeMs = 0l;
+    private long startTimeMs = 0L;
 
     /**
      * Current timestamp in milliseconds as returned by our {@link #timeFunction}.
      *
-     * Updated only every {@link #RECORDS_BETWEEN_TIME_CHECKS} records to cut down
+     * Updated only every {@link #recordsBetweenTimeChecks} records to cut down
      * on system calls.
      */
-    private long currentTimeMs = 0l;
+    private long currentTimeMs = 0L;
 
     /**
      * Timestamp in milliseconds as returned by our {@link #timeFunction} of the last time
      * we outputted a progress line to the logger
      */
-    private long lastPrintTimeMs = 0l;
+    private long lastPrintTimeMs = 0L;
 
     /**
      * The genomic location of the most recently processed record, or null if the most recent record had no location.
@@ -90,7 +102,7 @@ public final class ProgressMeter {
      * The number of times we've outputted a status line to the logger via {@link #printProgress}.
      * We keep track of this only for unit-testing purposes.
      */
-    private long numLoggerUpdates = 0l;
+    private long numLoggerUpdates = 0L;
 
     /**
      * Function that returns the current time in milliseconds (defaults to {@link #DEFAULT_TIME_FUNCTION}).
@@ -107,6 +119,11 @@ public final class ProgressMeter {
      * Keeps track of whether the progress meter has been stopped.
      */
     private boolean stopped;
+
+    /**
+     * Label for records in logger messages. For display purposes only.
+     */
+    private String recordLabel = DEFAULT_RECORD_LABEL;
 
     /**
      * Create a progress meter with the default update interval of {@link #DEFAULT_SECONDS_BETWEEN_UPDATES} seconds
@@ -138,10 +155,7 @@ public final class ProgressMeter {
     @VisibleForTesting
     ProgressMeter( final double secondsBetweenUpdates, final LongSupplier timeFunction ) {
         Utils.nonNull(timeFunction);
-        if ( secondsBetweenUpdates <= 0.0 ) {
-            throw new IllegalArgumentException("secondsBetweenUpdates must be > 0.0");
-        }
-
+        Utils.validateArg(secondsBetweenUpdates > 0, "secondsBetweenUpdates must be > 0.0");
         this.started = false;
         this.stopped = false;
         this.secondsBetweenUpdates = secondsBetweenUpdates;
@@ -149,16 +163,31 @@ public final class ProgressMeter {
     }
 
     /**
+     * Set the number of records we need to process before we check the current time
+     *
+     * @param recordsBetweenTimeChecks number of records we need to process before we check the current time
+     */
+    public void setRecordsBetweenTimeChecks( final long recordsBetweenTimeChecks ) {
+        this.recordsBetweenTimeChecks = recordsBetweenTimeChecks;
+    }
+
+    /**
+     * Change the label used for records in logger messages. Default label is {@link #DEFAULT_RECORD_LABEL}
+     *
+     * @param label Label to use for records in logger messages. Not null.
+     */
+    public void setRecordLabel( final String label ) {
+        Utils.nonNull(label);
+        this.recordLabel = label;
+    }
+
+    /**
      * Start the progress meter and produce preliminary output such as column headings.
      * @throws IllegalStateException if the meter has been started before or has been stopped already
      */
     public void start() {
-        if (started){
-            throw new IllegalStateException("the progress meter has been started already");
-        }
-        if (stopped){
-            throw new IllegalStateException("the progress meter has been stopped already");
-        }
+        Utils.validate( !started, "the progress meter has been started already");
+        Utils.validate( !stopped, "the progress meter has been stopped already");
         started = true;
         logger.info("Starting traversal");
         printHeader();
@@ -166,8 +195,8 @@ public final class ProgressMeter {
         startTimeMs = timeFunction.getAsLong();
         currentTimeMs = startTimeMs;
         lastPrintTimeMs = startTimeMs;
-        numRecordsProcessed = 0l;
-        numLoggerUpdates = 0l;
+        numRecordsProcessed = 0L;
+        numLoggerUpdates = 0L;
         currentLocus = null;
     }
 
@@ -179,14 +208,10 @@ public final class ProgressMeter {
      * @throws IllegalStateException if the meter has not been started yet or has been stopped already
      */
     public void update( final Locatable currentLocus ) {
-        if (! started){
-            throw new IllegalStateException("the progress meter has not been started yet");
-        }
-        if (stopped){
-            throw new IllegalStateException("the progress meter has been stopped already");
-        }
+        Utils.validate(started, "the progress meter has not been started yet");
+        Utils.validate( !stopped, "the progress meter has been stopped already");
         ++numRecordsProcessed;
-        if ( numRecordsProcessed % RECORDS_BETWEEN_TIME_CHECKS == 0 ) {
+        if ( numRecordsProcessed % recordsBetweenTimeChecks == 0 ) {
             currentTimeMs = timeFunction.getAsLong();
             this.currentLocus = currentLocus;
 
@@ -202,15 +227,13 @@ public final class ProgressMeter {
      * @throws IllegalStateException if the meter has not been started yet or has been stopped already
      */
     public void stop() {
-        if (! started){
-            throw new IllegalStateException("the progress meter has not been started yet");
-        }
-        if (stopped){
-            throw new IllegalStateException("the progress meter has been stopped already");
-        }
+        Utils.validate(started, "the progress meter has not been started yet");
+        Utils.validate( !stopped, "the progress meter has been stopped already");
         this.stopped = true;
         currentTimeMs = timeFunction.getAsLong();
-        logger.info(String.format("Traversal complete. Processed %d total records in %.1f minutes.", numRecordsProcessed, elapsedTimeInMinutes()));
+        // Output progress a final time at the end
+        printProgress();
+        logger.info(String.format("Traversal complete. Processed %d total %s in %.1f minutes.", numRecordsProcessed, recordLabel, elapsedTimeInMinutes()));
     }
 
     /**
@@ -218,7 +241,9 @@ public final class ProgressMeter {
      */
     private void printHeader() {
         logger.info(String.format("%20s  %15s  %20s  %15s",
-                                  "Current Locus", "Elapsed Minutes", "Records Processed", "Records/Minute"));
+                                  "Current Locus", "Elapsed Minutes",
+                                  StringUtils.capitalize(recordLabel) + " Processed",
+                                  StringUtils.capitalize(recordLabel) + "/Minute"));
     }
 
     /**

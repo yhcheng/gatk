@@ -435,7 +435,7 @@ public final class CountSet implements Set<Integer> {
      */
     private class MyIterator implements Iterator<Integer> {
         /** What position I am in. */
-        private final int next = 0;
+        private int next = 0;
 
         @Override
         public boolean hasNext() {
@@ -446,14 +446,12 @@ public final class CountSet implements Set<Integer> {
         public Integer next() {
             if (next >= size)
                 throw new NoSuchElementException();
-            return elements[next];
+            return elements[next++];
         }
 
         @Override
         public void remove() {
-            if (next == 0) {
-                throw new IllegalStateException();
-            }
+            Utils.validate(next != 0, "Next should be non-zero.");
             if (next >= size) {
                 throw new NoSuchElementException();
             }

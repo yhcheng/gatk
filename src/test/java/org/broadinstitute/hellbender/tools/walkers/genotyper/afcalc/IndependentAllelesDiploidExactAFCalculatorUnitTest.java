@@ -6,7 +6,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -15,7 +15,7 @@ import java.util.*;
 
 
 // SEE  private/R/pls.R if you want the truth output for these tests
-public final class IndependentAllelesDiploidExactAFCalculatorUnitTest extends BaseTest {
+public final class IndependentAllelesDiploidExactAFCalculatorUnitTest extends GATKBaseTest {
     @DataProvider(name = "TestCombineGLs")
     public Object[][] makeTestCombineGLs() {
         List<Object[]> tests = new ArrayList<>();
@@ -152,7 +152,7 @@ public final class IndependentAllelesDiploidExactAFCalculatorUnitTest extends Ba
         final List<Double> pNonRefN = new LinkedList<>();
         for ( int i = 0; i < log10LAlleles.size(); i++ ) {
             final double log10LAllele1 = log10LAlleles.get(i);
-            final double[] L1 = MathUtils.normalizeFromLog10(new double[]{log10LAllele1, 0.0}, true);
+            final double[] L1 = MathUtils.normalizeLog10(new double[]{log10LAllele1, 0.0});
             final AFCalculationResult result1 = new AFCalculationResult(new int[]{1}, Arrays.asList(A, C), L1, rawPriors, Collections.singletonMap(C, -10000.0));
             originalPriors.add(result1);
             pNonRefN.add(log10pNonRef*(i+1));

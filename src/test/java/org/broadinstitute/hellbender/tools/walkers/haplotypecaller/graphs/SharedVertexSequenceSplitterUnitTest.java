@@ -4,7 +4,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -12,8 +12,8 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.util.*;
 
-public class SharedVertexSequenceSplitterUnitTest extends BaseTest {
-    private final static boolean PRINT_GRAPHS = false;
+public class SharedVertexSequenceSplitterUnitTest extends GATKBaseTest {
+    private static final boolean PRINT_GRAPHS = false;
 
     @DataProvider(name = "PrefixSuffixData")
     public Object[][] makePrefixSuffixData() {
@@ -209,7 +209,13 @@ public class SharedVertexSequenceSplitterUnitTest extends BaseTest {
             sortedSplitPaths.add(kbh.bases());
         Collections.sort(sortedSplitPaths, BaseUtils.BASES_COMPARATOR);
 
-        Assert.assertEquals(sortedSplitPaths, sortedOriginalPaths, Utils.join("_", strings) + "_" + hasTop + "_" + hasBot);
+        Assert.assertEquals(sortedSplitPaths.size(), sortedOriginalPaths.size());
+        for (int i=0; i < sortedSplitPaths.size(); i++) {
+            Assert.assertEquals(
+                    sortedSplitPaths.get(i),
+                    sortedOriginalPaths.get(i),
+                    Utils.join("_", strings) + "_" + hasTop + "_" + hasBot);
+        }
     }
 
     /**

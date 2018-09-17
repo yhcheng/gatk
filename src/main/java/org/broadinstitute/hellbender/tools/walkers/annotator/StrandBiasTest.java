@@ -5,15 +5,14 @@ import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.genotyper.MostLikelyAllele;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
-import java.util.List;
-import java.util.Map;
-import java.util.StringTokenizer;
+import java.util.*;
 
 /**
  * Class of tests to detect strand bias.
@@ -27,10 +26,10 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
     //template method for calculating strand bias annotations using the three different methods
     public Map<String, Object> annotate(final ReferenceContext ref,
                                         final VariantContext vc,
-                                        final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap) {
+                                        final ReadLikelihoods<Allele> likelihoods) {
         Utils.nonNull(vc);
         if ( !vc.isVariant() ) {
-            return null;
+            return Collections.emptyMap();
         }
 
         // if the genotype and strand bias are provided, calculate the annotation from the Genotype (GT) field
@@ -42,16 +41,25 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
             }
         }
 
-        if (stratifiedPerReadAlleleLikelihoodMap != null) {
-            return calculateAnnotationFromLikelihoodMap(stratifiedPerReadAlleleLikelihoodMap, vc);
+        if (likelihoods != null) {
+            if (vc.isSNP() && !likelihoods.hasFilledLikelihoods() && (likelihoods.readCount() != 0)) {
+                return calculateAnnotationFromStratifiedContexts(likelihoods.getStratifiedPileups(vc), vc);
+            }
+
+            if (likelihoods.hasFilledLikelihoods()) {
+                return calculateAnnotationFromLikelihoods(likelihoods, vc);
+            }
         }
-        return null;
+        return Collections.emptyMap();
     }
 
     protected abstract Map<String, Object> calculateAnnotationFromGTfield(final GenotypesContext genotypes);
 
-    protected abstract Map<String, Object> calculateAnnotationFromLikelihoodMap(final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap,
-                                                                                final VariantContext vc);
+    protected abstract Map<String, Object> calculateAnnotationFromStratifiedContexts(final Map<String, List<PileupElement>> stratifiedContexts,
+                                                                                     final VariantContext vc);
+
+    protected abstract Map<String, Object> calculateAnnotationFromLikelihoods(final ReadLikelihoods<Allele> likelihoods,
+                                                                              final VariantContext vc);
 
     /**
      * Create the contingency table by retrieving the per-sample strand bias annotation and adding them together
@@ -74,8 +82,18 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
             }
 
             foundData = true;
-            final String sbbsString = (String) g.getAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY);
-            final int[] data = encodeSBBS(sbbsString);
+            int[] data;
+            if ( g.getAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY).getClass().equals(String.class)) {
+                final String sbbsString = (String)g.getAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY);
+                data = encodeSBBS(sbbsString);
+            } else if (g.getAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY).getClass().equals(ArrayList.class)) {
+                @SuppressWarnings("unchecked")
+                final List<Integer> sbbsList = (ArrayList<Integer>) g.getAnyAttribute(GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY);
+                data = encodeSBBS(sbbsList);
+            } else {
+                throw new GATKException("Unexpected " + GATKVCFConstants.STRAND_BIAS_BY_SAMPLE_KEY + " type");
+            }
+
             if ( passesMinimumThreshold(data, minCount) ) {
                 for( int index = 0; index < sbArray.length; index++ ) {
                     sbArray[index] += data[index];
@@ -93,26 +111,38 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
      *   allele2   #       #
      * @return a 2x2 contingency table
      */
-    public static int[][] getContingencyTable( final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap,
+    public static int[][] getContingencyTable( final ReadLikelihoods<Allele> likelihoods,
                                                final VariantContext vc,
                                                final int minCount) {
-        if( stratifiedPerReadAlleleLikelihoodMap == null || vc == null) {
+        return getContingencyTable(likelihoods, vc, minCount, likelihoods.samples());
+    }
+
+    /**
+     Allocate and fill a 2x2 strand contingency table.  In the end, it'll look something like this:
+     *             fw      rc
+     *   allele1   #       #
+     *   allele2   #       #
+     * @return a 2x2 contingency table
+     */
+    public static int[][] getContingencyTable( final ReadLikelihoods<Allele> likelihoods,
+                                               final VariantContext vc,
+                                               final int minCount,
+                                               final Collection<String> samples) {
+        if( likelihoods == null || vc == null) {
             return null;
         }
 
         final Allele ref = vc.getReference();
         final List<Allele> allAlts = vc.getAlternateAlleles();
-        final int[][] table = new int[ARRAY_DIM][ARRAY_DIM];
 
-        for (final PerReadAlleleLikelihoodMap maps : stratifiedPerReadAlleleLikelihoodMap.values() ) {
-            final int[] myTable = new int[ARRAY_SIZE];
-            for (final Map.Entry<GATKRead,Map<Allele,Double>> el : maps.getLikelihoodReadMap().entrySet()) {
-                final MostLikelyAllele mostLikelyAllele = PerReadAlleleLikelihoodMap.getMostLikelyAllele(el.getValue());
-                final GATKRead read = el.getKey();
-                updateTable(myTable, mostLikelyAllele.getAlleleIfInformative(), read, ref, allAlts);
-            }
-            if ( passesMinimumThreshold(myTable, minCount) ) {
-                copyToMainTable(myTable, table);
+        final int[][] table = new int[ARRAY_DIM][ARRAY_DIM];
+        for (final String sample : samples) {
+            final int[] sampleTable = new int[ARRAY_SIZE];
+            likelihoods.bestAllelesBreakingTies(sample).stream()
+                    .filter(ba -> ba.isInformative())
+                    .forEach(ba -> updateTable(sampleTable, ba.allele, ba.read, ref, allAlts));
+            if (passesMinimumThreshold(sampleTable, minCount)) {
+                copyToMainTable(sampleTable, table);
             }
         }
 
@@ -172,6 +202,21 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
     }
 
     /**
+     * Helper function to parse the genotype annotation into the SB annotation array
+     * @param arrayList the ArrayList returned from StrandBiasBySample.annotate()
+     * @return the array used by the per-sample Strand Bias annotation
+     */
+    private static int[] encodeSBBS( final List<Integer> arrayList ) {
+        final int[] array = new int[ARRAY_SIZE];
+        int index = 0;
+        for ( Integer item : arrayList ) {
+            array[index++] = item;
+        }
+
+        return array;
+    }
+
+    /**
      * Helper function to turn the  SB annotation array into a contingency table
      * @param array the array used by the per-sample Strand Bias annotation
      * @return the table used by the StrandBiasTest annotation
@@ -187,4 +232,35 @@ public abstract class StrandBiasTest extends InfoFieldAnnotation {
         table[1][1] = array[3];
         return table;
     }
+
+    /**
+     Allocate and fill a 2x2 strand contingency table.  In the end, it'll look something like this:
+     *             fw      rc
+     *   allele1   #       #
+     *   allele2   #       #
+     * @return a 2x2 contingency table over SNP sites
+     */
+    protected static int[][] getPileupContingencyTable(final Map<String, List<PileupElement>> stratifiedContexts,
+                                                       final Allele ref,
+                                                       final List<Allele> allAlts,
+                                                       final int minQScoreToConsider,
+                                                       final int minCount ) {
+        int[][] table = new int[ARRAY_DIM][ARRAY_DIM];
+
+        for (final Map.Entry<String, List<PileupElement>> sample : stratifiedContexts.entrySet() ) {
+            final int[] myTable = new int[ARRAY_SIZE];
+            for (final PileupElement p : sample.getValue()) {
+                if (PileupElement.isUsableBaseForAnnotation(p) && Math.min(p.getQual(), p.getMappingQual()) >= minQScoreToConsider) {
+                    updateTable(myTable, Allele.create(p.getBase(), false), p.getRead(), ref, allAlts);
+                }
+            }
+
+            if ( passesMinimumThreshold( myTable, minCount ) ) {
+                copyToMainTable(myTable, table);
+            }
+        }
+        return table;
+    }
+
+
 }

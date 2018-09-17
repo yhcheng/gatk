@@ -6,6 +6,7 @@ import htsjdk.samtools.filter.SamRecordFilter;
 import htsjdk.samtools.util.CloseableIterator;
 import htsjdk.samtools.util.PeekableIterator;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,9 +42,11 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
         peekIterator = new PeekableIterator<>(new FilteringSamIterator(querynameOrderIterator,
                 new SamRecordFilter() {
                     // Filter unmapped reads.
+                    @Override
                     public boolean filterOut(final SAMRecord record) {
                         return record.getReadUnmappedFlag() || SAMUtils.cigarMapsNoBasesToRef(record.getCigar());
                     }
+                    @Override
                     public boolean filterOut(final SAMRecord first, final SAMRecord second) {
                         return ((first.getReadUnmappedFlag() || SAMUtils.cigarMapsNoBasesToRef(first.getCigar()))
                                 && (second.getReadUnmappedFlag() || SAMUtils.cigarMapsNoBasesToRef(second.getCigar())));
@@ -54,10 +57,12 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
         advance();
     }
 
+    @Override
     public void close() {
         peekIterator.close();
     }
 
+    @Override
     public boolean hasNext() {
         return theNext != null;
     }
@@ -65,6 +70,7 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
     /**
      * @throws IllegalStateException if the input is not queryname-sorted.
      */
+    @Override
     public HitsForInsert next() {
         if (!hasNext()) throw new NoSuchElementException();
         final HitsForInsert ret = theNext;
@@ -81,7 +87,7 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
     }
 
     private HitsForInsert nextMaybeEmpty() {
-        if (!peekIterator.hasNext()) throw new IllegalStateException();
+        Utils.validate(peekIterator.hasNext(), "iterator has no next");
         final String readName = peekIterator.peek().getReadName();
         final HitsForInsert hits = new HitsForInsert();
 
@@ -126,11 +132,11 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
             // No HI tags needed if only a single hit
             if (hits.getFirstOfPair(0) != null) {
                 hits.getFirstOfPair(0).setAttribute(SAMTag.HI.name(), null);
-                hits.getFirstOfPair(0).setNotPrimaryAlignmentFlag(false);
+                hits.getFirstOfPair(0).setSecondaryAlignment(false);
             }
             if (hits.getSecondOfPair(0) != null) {
                 hits.getSecondOfPair(0).setAttribute(SAMTag.HI.name(), null);
-                hits.getSecondOfPair(0).setNotPrimaryAlignmentFlag(false);
+                hits.getSecondOfPair(0).setSecondaryAlignment(false);
             }
         } else {
             primaryAlignmentSelectionStrategy.pickPrimaryAlignment(hits);
@@ -177,6 +183,7 @@ public final class MultiHitAlignedReadIterator implements CloseableIterator<Hits
     }
 
     /** Unsupported operation. */
+    @Override
     public void remove() {
         throw new UnsupportedOperationException();
     }

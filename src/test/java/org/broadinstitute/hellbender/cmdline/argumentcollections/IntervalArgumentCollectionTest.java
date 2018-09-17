@@ -1,21 +1,24 @@
 package org.broadinstitute.hellbender.cmdline.argumentcollections;
 
-import org.broadinstitute.hellbender.cmdline.ArgumentCollection;
-import org.broadinstitute.hellbender.cmdline.CommandLineParser;
+import org.broadinstitute.barclay.argparser.ArgumentCollection;
+import org.broadinstitute.barclay.argparser.CommandLineException;
+import org.broadinstitute.barclay.argparser.CommandLineParser;
+import org.broadinstitute.barclay.argparser.CommandLineArgumentParser;
 import org.broadinstitute.hellbender.engine.TraversalParameters;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.IntervalMergingRule;
 import org.broadinstitute.hellbender.utils.IntervalSetRule;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.Arrays;
 
-public final class IntervalArgumentCollectionTest extends BaseTest{
+public final class IntervalArgumentCollectionTest extends GATKBaseTest {
 
     @DataProvider(name = "optionalOrNot")
     public Object[][] optionalOrNot(){
@@ -38,19 +41,18 @@ public final class IntervalArgumentCollectionTest extends BaseTest{
     @Test
     public void testOptionalIsOptional(){
         WithOptionalIntervals opt = new WithOptionalIntervals();
-        CommandLineParser clp = new CommandLineParser(opt);
+        CommandLineParser clp = new CommandLineArgumentParser(opt);
         String[] args = {};
         clp.parseArguments(System.out, args);
     }
 
-    @Test(expectedExceptions = UserException.class)
+    @Test(expectedExceptions = CommandLineException.class)
     public void testRequiredIsRequired(){
         WithRequiredIntervals opt = new WithRequiredIntervals();
-        CommandLineParser clp = new CommandLineParser(opt);
+        CommandLineParser clp = new CommandLineArgumentParser(opt);
         String[] args = {};
         clp.parseArguments(System.out, args);
     }
-
 
     @Test(dataProvider = "optionalOrNot",expectedExceptions = GATKException.class)
     public void emptyIntervalsTest(IntervalArgumentCollection iac){
@@ -67,11 +69,59 @@ public final class IntervalArgumentCollectionTest extends BaseTest{
     }
 
     @Test(dataProvider = "optionalOrNot")
+    public void testExcludeWithPadding(IntervalArgumentCollection iac){
+        iac.intervalExclusionPadding = 10;
+        iac.addToIntervalStrings("1:1-100");
+        iac.excludeIntervalStrings.add("1:90-100");
+        Assert.assertTrue(iac.intervalsSpecified());
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 1, 79)));
+    }
+
+    @Test(dataProvider = "optionalOrNot")
     public void testIncludeWithExclude(IntervalArgumentCollection iac){
         iac.addToIntervalStrings("1:1-100");
         iac.excludeIntervalStrings.add("1:90-200");
         Assert.assertTrue(iac.intervalsSpecified());
         Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 1, 89)));
+    }
+
+    @Test(dataProvider = "optionalOrNot")
+    public void testIncludeWithPadding(IntervalArgumentCollection iac){
+        iac.addToIntervalStrings("1:20-30");
+        iac.intervalPadding = 10;
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 10, 40)));
+    }
+
+    @Test(dataProvider = "optionalOrNot")
+    public void testIntervalMergingRuleAdjacentMerge(IntervalArgumentCollection iac){
+        iac.addToIntervalStrings("1:1-100");
+        iac.addToIntervalStrings("1:101-200");
+        iac.intervalMergingRule = IntervalMergingRule.ALL;
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 1, 200)));
+    }
+
+    @Test(dataProvider = "optionalOrNot")
+    public void testIntervalMergingRuleAdjacentNoMerge(IntervalArgumentCollection iac){
+        iac.addToIntervalStrings("1:1-100");
+        iac.addToIntervalStrings("1:101-200");
+        iac.intervalMergingRule = IntervalMergingRule.OVERLAPPING_ONLY;
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()).size(), 2);
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()).get(0), new SimpleInterval("1", 1, 100));
+        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()).get(1), new SimpleInterval("1", 101, 200));
+    }
+
+    /**
+     * Asserts that the interval set rule is applied first, then the interval ordering rule. This should give an error because the overlap is empty.
+     * @param iac
+     */
+    @Test(dataProvider = "optionalOrNot", expectedExceptions = CommandLineException.BadArgumentValue.class)
+    public void testIntervalSetAndMergingOverlap(IntervalArgumentCollection iac){
+        iac.addToIntervalStrings("1:1-100");
+        iac.addToIntervalStrings("1:101-200");
+        iac.addToIntervalStrings("1:90-110");
+        iac.intervalSetRule = IntervalSetRule.INTERSECTION;
+        iac.intervalMergingRule = IntervalMergingRule.ALL;
+        iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary());
     }
 
     @Test(dataProvider = "optionalOrNot")
@@ -90,21 +140,15 @@ public final class IntervalArgumentCollectionTest extends BaseTest{
         Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 1, 200)));
     }
 
-    @Test(dataProvider = "optionalOrNot")
-    public void testPadding(IntervalArgumentCollection iac){
-        iac.addToIntervalStrings("1:20-30");
-        iac.intervalPadding = 10;
-        Assert.assertEquals(iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary()), Arrays.asList(new SimpleInterval("1", 10, 40)));
-    }
 
-    @Test(dataProvider = "optionalOrNot", expectedExceptions = UserException.BadArgumentValue.class)
+    @Test(dataProvider = "optionalOrNot", expectedExceptions = CommandLineException.BadArgumentValue.class)
     public void testAllExcluded(IntervalArgumentCollection iac){
         iac.addToIntervalStrings("1:10-20");
         iac.excludeIntervalStrings.add("1:1-200");
         iac.getIntervals(hg19GenomeLocParser.getSequenceDictionary());
     }
 
-    @Test(dataProvider = "optionalOrNot", expectedExceptions= UserException.BadArgumentValue.class)
+    @Test(dataProvider = "optionalOrNot", expectedExceptions= CommandLineException.BadArgumentValue.class)
     public void testNoIntersection(IntervalArgumentCollection iac){
         iac.addToIntervalStrings("1:10-20");
         iac.addToIntervalStrings("1:50-200");

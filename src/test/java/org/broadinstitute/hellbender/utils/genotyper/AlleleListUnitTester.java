@@ -6,7 +6,7 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.testng.Assert;
 import org.testng.SkipException;
 
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -39,19 +39,15 @@ public final class AlleleListUnitTester {
      */
     @SuppressWarnings("unchecked")
     public static <A extends Allele> void assertAlleleList(final AlleleList<A> actual, final List<A> expected) {
-        if (expected == null)
-            throw new IllegalArgumentException("the expected list cannot be null");
-        final Set<A> expectedAlleleSet = new HashSet<>(expected.size());
+        Utils.nonNull(expected, "the expected list cannot be null");
+        final Set<A> expectedAlleleSet = new LinkedHashSet<>(expected.size());
         Assert.assertNotNull(actual);
         Assert.assertEquals(actual.numberOfAlleles(), expected.size());
         for (int i = 0; i < expected.size(); i++) {
             final A expectedAllele = expected.get(i);
-            if (expectedAllele == null)
-                throw new IllegalArgumentException("the expected sample cannot be null");
-            if (expectedAllele.equals(NEVER_USE_ALLELE))
-                throw new IllegalArgumentException("you cannot use the forbidden sample name");
-            if (expectedAlleleSet.contains(expected.get(i)))
-                throw new IllegalArgumentException("repeated allele in the expected list, this is a test bug");
+            Utils.nonNull(expectedAllele, "the expected sample cannot be null");
+            Utils.validateArg(!expectedAllele.equals(NEVER_USE_ALLELE), "you cannot use the forbidden sample name");
+            Utils.validateArg(!expectedAlleleSet.contains(expected.get(i)), "repeated allele in the expected list, this is a test bug");
             final A actualAllele = actual.getAllele(i);
             Assert.assertNotNull(actualAllele, "allele cannot be null");
             Assert.assertFalse(expectedAlleleSet.contains(actualAllele), "repeated allele: " + actualAllele);
@@ -86,9 +82,8 @@ public final class AlleleListUnitTester {
      * @return never {@code null}.
      */
     public static Allele[] generateRandomUniqueAlleles(final int alleleCount, final int maxAlleleLength) {
-        if (maxAlleleLength < 1)
-            throw new IllegalArgumentException("the max allele length cannot be less than 1");
-        final Set<Allele> set = new HashSet<>(alleleCount);
+        Utils.validateArg(maxAlleleLength > 0, "the max allele length cannot be less than 1");
+        final Set<Allele> set = new LinkedHashSet<>(alleleCount);
         while(set.size() < alleleCount){
             final int alleleLength = rnd.nextInt(maxAlleleLength) + 1;
             final Allele result = Allele.create(rndDNA.nextBases(alleleLength));

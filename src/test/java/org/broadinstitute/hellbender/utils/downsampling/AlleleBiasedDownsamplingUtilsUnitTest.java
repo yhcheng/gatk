@@ -2,13 +2,14 @@ package org.broadinstitute.hellbender.utils.downsampling;
 
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.variant.variantcontext.Allele;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -21,7 +22,9 @@ import java.util.*;
 /**
  * Basic unit test for AlleleBiasedDownsamplingUtils
  */
-public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
+public class AlleleBiasedDownsamplingUtilsUnitTest extends GATKBaseTest {
+
+    private static final org.apache.logging.log4j.Logger logger = LogManager.getLogger(AlleleBiasedDownsamplingUtilsUnitTest.class);
 
     /**
      * Directory where the testdata is located.
@@ -110,7 +113,7 @@ public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
 
         final char[] bases= {'A', 'C', 'G', 'T'};   //note: hardwired to use same order as actualCounts
         final byte[] quals = {30};
-        final Map<Allele, List<GATKRead>> readMap= new HashMap<>(bases.length);
+        final Map<Allele, List<GATKRead>> readMap= new LinkedHashMap<>(bases.length);
         for (int idx = 0; idx < bases.length; idx++) {
             final Allele nonRefAllele = Allele.create(String.valueOf(bases[idx]));
             readMap.put(nonRefAllele, new ArrayList<>());
@@ -139,12 +142,10 @@ public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
 
     @Test
     public void testLoadContaminationFileDetails() throws IOException {
-        final Logger logger=org.apache.log4j.Logger.getRootLogger();
-
         final File ContamFile1=new File(TEST_DATA_DIR, "contamination.case.1.txt");
 
-        final Map<String,Double> Contam1=new HashMap<>();
-        final Set<String> Samples1= new HashSet<>();
+        final Map<String,Double> Contam1=new LinkedHashMap<>();
+        final Set<String> Samples1= new LinkedHashSet<>();
 
         Contam1.put("NA11918",0.15);
         Samples1.addAll(Contam1.keySet());
@@ -164,8 +165,8 @@ public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
     }
 
     @DataProvider(name = "goodContaminationFiles")
-    public Integer[][] goodContaminationFiles() {
-        return new Integer[][]{
+    public Object[][] goodContaminationFiles() {
+        return new Object[][]{
                 {1, 2},
                 {2, 3},
                 {3, 2},
@@ -178,9 +179,8 @@ public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
     }
 
     @Test(dataProvider = "goodContaminationFiles")
-    public void testLoadContaminationFile(final Integer ArtificalBAMnumber, final Integer numberOfSamples) throws IOException {
-        final String ArtificialBAM = String.format("contamination.case.%d.txt", ArtificalBAMnumber);
-        final Logger logger = org.apache.log4j.Logger.getRootLogger();
+    public void testLoadContaminationFile(final int artificalBAMnumber, final int numberOfSamples) throws IOException {
+        final String ArtificialBAM = String.format("contamination.case.%d.txt", artificalBAMnumber);
 
         final File file = new File(TEST_DATA_DIR, ArtificialBAM);
         Assert.assertTrue(AlleleBiasedDownsamplingUtils.loadContaminationFile(file, 0.0, null, logger).size() == numberOfSamples);
@@ -189,14 +189,12 @@ public class AlleleBiasedDownsamplingUtilsUnitTest extends BaseTest {
 
 
     @DataProvider(name = "badContaminationFiles")
-    public Integer[][] badContaminationFiles() {
-        return new Integer[][]{{1}, {2}, {3}, {4}, {5}};
+    public Object[][] badContaminationFiles() {
+        return new Object[][]{{1}, {2}, {3}, {4}, {5}};
     }
 
     @Test(dataProvider = "badContaminationFiles", expectedExceptions = UserException.MalformedFile.class)
     public void testLoadBrokenContaminationFile(final int i) throws IOException {
-        final Logger logger = org.apache.log4j.Logger.getRootLogger();
-
         final File file = new File(TEST_DATA_DIR, String.format("contamination.case.broken.%d.txt", i));
         AlleleBiasedDownsamplingUtils.loadContaminationFile(file, 0.0, null, logger);
 

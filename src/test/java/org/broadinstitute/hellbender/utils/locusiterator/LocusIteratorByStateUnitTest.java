@@ -22,19 +22,6 @@ import java.util.*;
 
 public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBaseTest {
 
-    @Test
-    public void testIterator() {
-        final int readLength = 10;
-        final GATKRead mapped1 = ArtificialReadUtils.createArtificialRead(header, "mapped1", 0, 1, readLength);
-        final GATKRead mapped2 = ArtificialReadUtils.createArtificialRead(header, "mapped2", 0, 1, readLength);
-
-        final List<GATKRead> reads = Arrays.asList(mapped1, mapped2);
-
-        final LocusIteratorByState li;
-        li = makeLIBS(reads, DownsamplingMethod.NONE, true, header);
-        Assert.assertSame(li.iterator(), li);
-    }
-
     @Test(expectedExceptions = NoSuchElementException.class)
     public void testIteratingBeyondElements() {
         final int readLength = 3;
@@ -308,6 +295,30 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
         }
     }
 
+    /**
+     * Test to make sure that if there are reads with Ns are keeped
+     */
+    @Test
+    public void testKeepingNs() {
+        final int firstLocus = 44367788, secondLocus = firstLocus + 1;
+
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header,"read1",0,secondLocus,1);
+        read.setBases(Utils.dupBytes((byte) 'N', 1));
+        read.setBaseQualities(Utils.dupBytes((byte) '@', 1));
+        read.setCigar("1I");
+
+        // create the iterator by state with the fake reads and fake records
+        LocusIteratorByState libs = makeLIBSwithNs(Collections.singletonList(read), header);
+
+        while(libs.hasNext()) {
+            final AlignmentContext alignmentContext = libs.next();
+            final ReadPileup rp = alignmentContext.getBasePileup();
+            Assert.assertEquals(rp.size(), 1);
+            final PileupElement pe = rp.iterator().next();
+            Assert.assertEquals(pe.getBase(), (byte) 'N');
+        }
+
+    }
 
     /////////////////////////////////////////////
     // get event length and bases calculations //
@@ -482,12 +493,17 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
 
         final List<GATKRead> reads = bamBuilder.makeReads();
         final LocusIteratorByState li;
-        li = new LocusIteratorByState(new FakeCloseableIterator<>(reads.iterator()),
-                downsampler, true, keepReads,
-                bamBuilder.getSamples(), bamBuilder.getHeader());
+        li = new LocusIteratorByState(
+                new FakeCloseableIterator<>(reads.iterator()),
+                downsampler,
+                keepReads,
+                bamBuilder.getSamples(),
+                bamBuilder.getHeader(),
+                true
+        );
 
-        final Set<GATKRead> seenSoFar = new HashSet<>();
-        final Set<GATKRead> keptReads = new HashSet<>();
+        final Set<GATKRead> seenSoFar = new LinkedHashSet<>();
+        final Set<GATKRead> keptReads = new LinkedHashSet<>();
         int bpVisited = 0;
         while ( li.hasNext() ) {
             bpVisited++;
@@ -564,7 +580,7 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
             }
 
             // check uniqueness
-            final Set<String> readNames = new HashSet<>();
+            final Set<String> readNames = new LinkedHashSet<>();
             for ( final GATKRead read : keptReads ) {
                 Assert.assertFalse(readNames.contains(read.getName()), "Found duplicate reads in the kept reads");
                 readNames.add(read.getName());
@@ -640,9 +656,14 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
         final WeakReadTrackingIterator iterator = new WeakReadTrackingIterator(nReadsPerLocus, readLength, payloadInBytes, header);
 
         final LocusIteratorByState li;
-        li = new LocusIteratorByState(iterator,
-                downsampler, true, false,
-                samples, header);
+        li = new LocusIteratorByState(
+                iterator,
+                downsampler,
+                false,
+                samples,
+                header,
+                true
+        );
 
         while ( li.hasNext() ) {
             final AlignmentContext next = li.next();
@@ -719,7 +740,7 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
                         read.setIsReverseStrand(false);
                         read.setMateIsReverseStrand(true);
                         read.setMatePosition(read.getContig(), start - 1);
-                        read.setFragmentLength(goodBases - 1);
+                        read.setFragmentLength(goodBases);
                         tests.add(new Object[]{0, goodBases, nClips, read});
                     }
                 }
@@ -736,9 +757,11 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
         li = new LocusIteratorByState(
                 new FakeCloseableIterator<>(Collections.singletonList(read).iterator()),
                 DownsamplingMethod.NONE,
-                true,
                 false,
-                sampleListForSAMWithoutReadGroups(), header);
+                sampleListForSAMWithoutReadGroups(),
+                header,
+                true
+        );
 
         int expectedPos = read.getStart() + nClipsOnLeft;
         int nPileups = 0;
@@ -750,6 +773,6 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
         }
 
         final int nExpectedPileups = nReadContainingPileups;
-        Assert.assertEquals(nPileups, nExpectedPileups, "Wrong number of pileups seen");
+        Assert.assertEquals(nPileups, nExpectedPileups, "\"Wrong number of pileups seen for " + read + " with " + nClipsOnLeft + " clipped bases.");
     }
 }

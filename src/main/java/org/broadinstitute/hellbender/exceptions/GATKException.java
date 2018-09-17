@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.exceptions;
 
+import htsjdk.samtools.SAMRecord;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 /**
@@ -20,26 +21,9 @@ public class GATKException extends RuntimeException {
         super(message, throwable);
     }
 
-    /**
-     * Subtypes of GATKException for common kinds of errors
+    /*
+      Subtypes of GATKException for common kinds of errors
      */
-
-    /**
-     * <p/>
-     * Class GATKException.CommandLineParserInternalException
-     * <p/>
-     * For internal errors in the command line parser not related to syntax errors in the command line itself.
-     */
-    public static class CommandLineParserInternalException extends GATKException {
-        private static final long serialVersionUID = 0L;
-        public CommandLineParserInternalException( final String s ) {
-            super(s);
-        }
-
-        public CommandLineParserInternalException( final String s, final Throwable throwable ) {
-            super(s, throwable);
-        }
-    }
 
     /**
      * <p/>
@@ -82,6 +66,18 @@ public class GATKException extends RuntimeException {
 
         public ReadAttributeTypeMismatch( final String attributeName, final String targetType, final Throwable throwable ) {
             super(String.format("Attribute %s not of (or convertible to) type %s", attributeName, targetType), throwable);
+        }
+
+        public ReadAttributeTypeMismatch( final SAMRecord read, final String attributeName, final String targetType) {
+            super(String.format("In read %s @ %s attribute %s not of (or convertible to) type %s", read.getReadName(), "" + read.getContig() + ":" + read.getStart(), attributeName, targetType));
+        }
+
+        public ReadAttributeTypeMismatch( final SAMRecord read, final String attributeName, final String targetType, final Object value) {
+            super(String.format("In read %s @ %s attribute %s not of (or convertible to) type %s: class is '%s' and value is '%s'", read.getReadName(), "" + read.getContig() + ":" + read.getStart(), attributeName, targetType, value == null ? "null" : value.getClass(), "" + value));
+        }
+
+        public ReadAttributeTypeMismatch( final SAMRecord read, final String attributeName, final String targetType, final Throwable ex) {
+            super(String.format("In read %s @ %s attribute %s not of (or convertible to) type %s", read.getReadName(), "" + read.getContig() + ":" + read.getStart(), attributeName, targetType, ex));
         }
     }
 }

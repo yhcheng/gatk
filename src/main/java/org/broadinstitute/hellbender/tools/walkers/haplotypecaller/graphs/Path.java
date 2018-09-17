@@ -5,8 +5,11 @@ import joptsimple.internal.Strings;
 import org.apache.commons.lang3.ArrayUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.CigarUtils;
+import org.broadinstitute.hellbender.utils.smithwaterman.SmithWatermanAligner;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.stream.Collectors;
 
 /**
@@ -37,9 +40,7 @@ public final class Path<T extends BaseVertex, E extends BaseEdge> {
     public Path(final T initialVertex, final BaseGraph<T, E> graph) {
         Utils.nonNull(initialVertex, "initialVertex cannot be null");
         Utils.nonNull(graph, "graph cannot be null");
-        if ( ! graph.containsVertex(initialVertex) ) {
-            throw new IllegalArgumentException("Vertex " + initialVertex + " must be part of graph " + graph);
-        }
+        Utils.validateArg(graph.containsVertex(initialVertex), () -> "Vertex " + initialVertex + " must be part of graph " + graph);
 
         lastVertex = initialVertex;
         edgesInOrder = new ArrayList<>(0);
@@ -59,9 +60,7 @@ public final class Path<T extends BaseVertex, E extends BaseEdge> {
     public Path(final Path<T,E> p, final E edge) {
         Utils.nonNull(p, "Path cannot be null");
         Utils.nonNull(edge, "Edge cannot be null");
-        if ( ! p.graph.containsEdge(edge) ) {
-            throw new IllegalArgumentException("Graph must contain edge " + edge + " but it doesn't");
-        }
+        Utils.validateArg(p.graph.containsEdge(edge), () -> "Graph must contain edge " + edge + " but it doesn't");
         if ( ! p.graph.getEdgeSource(edge).equals(p.lastVertex) ) { throw new IllegalStateException("Edges added to path must be contiguous."); }
 
         graph = p.graph;
@@ -93,9 +92,7 @@ public final class Path<T extends BaseVertex, E extends BaseEdge> {
     public Path(final E edge, final Path<T,E> p) {
         Utils.nonNull(p, "Path cannot be null");
         Utils.nonNull(edge, "Edge cannot be null");
-        if ( ! p.graph.containsEdge(edge) ) {
-            throw new IllegalArgumentException("Graph must contain edge " + edge + " but it doesn't");
-        }
+        Utils.validateArg(p.graph.containsEdge(edge), () -> "Graph must contain edge " + edge + " but it doesn't");
         if ( ! p.graph.getEdgeTarget(edge).equals(p.getFirstVertex())) { throw new IllegalStateException("Edges added to path must be contiguous."); }
         graph = p.graph;
         lastVertex = p.lastVertex;
@@ -200,11 +197,12 @@ public final class Path<T extends BaseVertex, E extends BaseEdge> {
      * Calculate the cigar elements for this path against the reference sequence
      *
      * @param refSeq the reference sequence that all of the bases in this path should align to
+     * @param aligner
      * @return a Cigar mapping this path to refSeq, or null if no reasonable alignment could be found
      */
-    public  Cigar calculateCigar(final byte[] refSeq) {
+    public  Cigar calculateCigar(final byte[] refSeq, final SmithWatermanAligner aligner) {
         //Note: CigarUtils.calculateCigar already checks for null
-        return CigarUtils.calculateCigar(refSeq,getBases());
+        return CigarUtils.calculateCigar(refSeq, getBases(), aligner);
     }
 
 }

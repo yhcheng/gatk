@@ -1,18 +1,15 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper.afcalc;
 
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypeBuilder;
-import htsjdk.variant.variantcontext.GenotypesContext;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import htsjdk.variant.variantcontext.*;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
-import org.testng.annotations.BeforeSuite;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.Arrays;
 
-public final class GeneralPloidyAFCalculationModelUnitTest extends BaseTest {
+public final class GeneralPloidyAFCalculationModelUnitTest extends GATKBaseTest {
 
     static double[] AA1, AB1, BB1;
     static double[] AA2, AB2, AC2, BB2, BC2, CC2;
@@ -21,7 +18,7 @@ public final class GeneralPloidyAFCalculationModelUnitTest extends BaseTest {
     static final int numSamples = 4;
     static final int samplePloidy = 4;   // = 2*samplesPerPool
 
-    @BeforeSuite
+    @BeforeClass
     public void before() {
         // legacy diploid cases
         AA1 = new double[]{-5.0, -20.0, -20.0};
@@ -129,7 +126,7 @@ public final class GeneralPloidyAFCalculationModelUnitTest extends BaseTest {
 
     @Test(dataProvider = "getGLs")
     public void testGLs(GetGLsTest cfg) {
-        final int len = GeneralPloidyExactAFCalculator.getNumLikelihoodElements(1 + cfg.numAltAlleles, cfg.ploidy * cfg.GLs.size());
+        final int len = GenotypeLikelihoods.numLikelihoods(1 + cfg.numAltAlleles, cfg.ploidy * cfg.GLs.size());
         double[] priors = new double[len];  // flat priors
 
         final GeneralPloidyExactAFCalculator calc = new GeneralPloidyExactAFCalculator();

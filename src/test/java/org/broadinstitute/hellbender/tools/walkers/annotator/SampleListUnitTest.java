@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import htsjdk.variant.variantcontext.*;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 import org.testng.Assert;
@@ -13,7 +13,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 
-public final class SampleListUnitTest extends BaseTest {
+public final class SampleListUnitTest extends GATKBaseTest {
 
     private static final int GQ30 = 30;
 
@@ -45,7 +45,7 @@ public final class SampleListUnitTest extends BaseTest {
         final List<String> sampleNamesInOrder=Arrays.asList("child", "dad", "mom");
         final GenotypesContext contextHomHetHet = GenotypesContext.create(genotypesHomHetHet, sampleNameToOffset, sampleNamesInOrder);
 
-        final Collection<Allele> alleles= new HashSet<>(2);
+        final Collection<Allele> alleles= new LinkedHashSet<>(2);
         alleles.addAll(g00Mom.getAlleles());
         alleles.addAll(g01Dad.getAlleles());
         alleles.addAll(g01Child.getAlleles());
@@ -61,14 +61,14 @@ public final class SampleListUnitTest extends BaseTest {
 
         final VariantContext vcNoCalls = new VariantContextBuilder("test", "20", 10, 10, alleles).make();
         final Map<String, Object> resultNoCalls = ann.annotate(null, vcNoCalls, null);
-        Assert.assertNull(resultNoCalls);
+        Assert.assertTrue(resultNoCalls.isEmpty());
 
         final ArrayList<Genotype> genotypesHomHomHom = new ArrayList<>(Arrays.<Genotype>asList(g00Child, g00Dad, g00Mom));
         final GenotypesContext contextHomHomHom = GenotypesContext.create(genotypesHomHomHom, sampleNameToOffset, sampleNamesInOrder);
 
         final VariantContext vcHomHomHom = new VariantContextBuilder("test", "20", 10, 10, alleles).genotypes(contextHomHomHom).make();
         final Map<String, Object> resultHomHomHom = ann.annotate(null, vcHomHomHom, null);
-        Assert.assertNull(resultHomHomHom);
+        Assert.assertTrue(resultHomHomHom.isEmpty());
 
 
         Assert.assertEquals(ann.getDescriptions(), Arrays.asList(GATKVCFHeaderLines.getInfoLine(GATKVCFConstants.SAMPLE_LIST_KEY)));
@@ -76,9 +76,9 @@ public final class SampleListUnitTest extends BaseTest {
     }
 
     @Test
-    public void testNullIfNoGenotypes() throws Exception {
+    public void testEmptyIfNoGenotypes() throws Exception {
         final SampleList ann = new SampleList();
         final Map<String, Object> annotate = ann.annotate(null, when(mock(VariantContext.class).getGenotypesOrderedByName()).thenReturn(Collections.<Genotype>emptyList()).getMock(), null);
-        Assert.assertNull(annotate);
+        Assert.assertTrue(annotate.isEmpty());
     }
 }

@@ -2,8 +2,8 @@ package org.broadinstitute.hellbender.utils.recalibration;
 
 
 import org.apache.commons.collections.CollectionUtils;
-import org.apache.log4j.LogManager;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.QualityUtils;
@@ -97,7 +97,7 @@ public final class RecalibrationReport {
      */
     public static GATKReport gatherReports(final List<File> inputs) {
         Utils.nonNull(inputs);
-        if ( inputs.isEmpty()) { throw new IllegalArgumentException("Cannot gather an empty list of inputs"); }
+        Utils.nonEmpty(inputs, "Cannot gather an empty list of inputs");
 
         final SortedSet<String> allReadGroups = new TreeSet<>();
         final Map<File, Set<String>> inputReadGroups = new LinkedHashMap<>();
@@ -409,16 +409,12 @@ public final class RecalibrationReport {
     }
 
     private static int decodeInteger(final Object value) {
-        if (!(value instanceof Integer || value instanceof String)){
-            throw new IllegalArgumentException("expected a Integer or a String but got " + value);
-        }
+        Utils.validateArg(value instanceof Integer || value instanceof String, () -> "expected an Integer or a String but got " + value);
         return value instanceof Integer ? (Integer) value: Integer.parseInt((String)value);
     }
 
     private static boolean decodeBoolean(final Object value) {
-        if (!(value instanceof Boolean || value instanceof String)){
-            throw new IllegalArgumentException("expected a Boolean or a String but got " + value);
-        }
+        Utils.validateArg(value instanceof Boolean || value instanceof String, () -> "expected a Boolean or a String but got " + value);
         return value instanceof Boolean ? (Boolean) value: Boolean.parseBoolean((String) value);
     }
 

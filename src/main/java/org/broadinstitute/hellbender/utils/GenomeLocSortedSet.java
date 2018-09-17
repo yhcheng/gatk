@@ -37,8 +37,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
      * @param parser a non-null the parser we use to create genome locs
      */
     public GenomeLocSortedSet(final GenomeLocParser parser) {
-        if ( parser == null ) throw new IllegalArgumentException("parser cannot be null");
-        this.genomeLocParser = parser;
+        this.genomeLocParser = Utils.nonNull(parser);
     }
 
     /**
@@ -92,6 +91,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
      *
      * @return the size of the collection
      */
+    @Override
     public int size() {
         return mArray.size();
     }
@@ -133,6 +133,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
      *
      * @return true if we have no elements
      */
+    @Override
     public boolean isEmpty() {
         return mArray.isEmpty();
     }
@@ -246,6 +247,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
      *
      * @return true if the loc was added or false otherwise (if the loc was null)
      */
+    @Override
     public boolean add(final GenomeLoc loc) {
         return add(loc, false);
     }
@@ -276,7 +278,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
 
         // if we have no other intervals yet or if the new loc is past the last one in the list (which is usually the
         // case because locs are generally added in order) then be extra efficient and just add the loc to the end
-        if ( mArray.size() == 0 || loc.isPast(mArray.get(mArray.size() - 1)) ) {
+        if (mArray.isEmpty() || loc.isPast(mArray.get(mArray.size() - 1)) ) {
             return mArray.add(loc);
         }
 
@@ -379,7 +381,7 @@ public final class GenomeLocSortedSet extends AbstractSet<GenomeLoc> {
      * @param location the GenomeLoc to remove
      */
     public void remove(GenomeLoc location) {
-        if (!mArray.contains(location)) throw new IllegalArgumentException("Unable to remove location: " + location + ", not in the list");
+        Utils.validateArg(mArray.contains(location), () -> "Unable to remove location: " + location + ", not in the list");
         mArray.remove(location);
     }
 

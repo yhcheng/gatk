@@ -1,9 +1,10 @@
 package org.broadinstitute.hellbender.tools;
 
-import org.broadinstitute.hellbender.cmdline.Argument;
-import org.broadinstitute.hellbender.cmdline.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadWalker;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
@@ -14,10 +15,11 @@ import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 
 import java.io.File;
 
+@DocumentedFeature
 @CommandLineProgramProperties(
 	summary = "Fixes Illumina base quality scores in a SAM/BAM/CRAM file",
     oneLineSummary = "Fix Illumina base quality scores in a SAM/BAM/CRAM file",
-    programGroup = ReadProgramGroup.class
+    programGroup = ReadDataManipulationProgramGroup.class
 )
 public final class FixMisencodedBaseQualityReads extends ReadWalker {
 
@@ -40,10 +42,9 @@ public final class FixMisencodedBaseQualityReads extends ReadWalker {
     }
 
     @Override
-    public Object onTraversalSuccess() {
+    public void closeTool() {
         if ( outputWriter != null ) {
             outputWriter.close();
         }
-        return null;
     }
 }

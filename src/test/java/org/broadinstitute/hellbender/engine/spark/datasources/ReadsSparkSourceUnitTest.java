@@ -8,15 +8,16 @@ import org.apache.hadoop.fs.Path;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
+import org.broadinstitute.hellbender.engine.TraversalParameters;
 import org.broadinstitute.hellbender.engine.spark.SparkContextFactory;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadConstants;
 import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.MiniClusterUtils;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -25,11 +26,10 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
-public class ReadsSparkSourceUnitTest extends BaseTest {
+import static org.testng.Assert.assertEquals;
 
-    private static final String dir = "src/test/resources/org/broadinstitute/hellbender/tools/";
-    private static final String dirBQSR = dir + "BQSR/";
-
+public class ReadsSparkSourceUnitTest extends GATKBaseTest {
+    private static final String dirBQSR = toolsTestDir + "BQSR/";
 
     @DataProvider(name = "loadReads")
     public Object[][] loadReads() {
@@ -38,7 +38,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
                 {dirBQSR + "HiSeq.1mb.1RG.2k_lines.alternate.bam", null},
                 {dirBQSR + "expected.HiSeq.1mb.1RG.2k_lines.alternate.recalibrated.DIQ.bam", null},
                 {NA12878_chr17_1k_CRAM, v37_chr17_1Mb_Reference},
-                {dir + "valid.cram", dir + "valid.fasta"}
+                {toolsTestDir + "valid.cram", toolsTestDir + "valid.fasta"}
         };
     }
 
@@ -58,6 +58,14 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         };
     }
 
+    // this tests handling the case where a reference is specified but the file doesn't exist
+    @Test(expectedExceptions = UserException.MissingReference.class)
+    public void loadReadsNonExistentReference() {
+        doLoadReads(toolsTestDir + "valid.cram",
+                GATKBaseTest.getSafeNonExistentFile("NonExistentReference.fasta").getAbsolutePath(),
+                ReadConstants.DEFAULT_READ_VALIDATION_STRINGENCY);
+    }
+
     private void doLoadReadsTest(String bam, String referencePath) {
         doLoadReads(bam, referencePath, ReadConstants.DEFAULT_READ_VALIDATION_STRINGENCY);
     }
@@ -72,6 +80,13 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         List<GATKRead> serialReads = rddSerialReads.collect();
         List<GATKRead> parallelReads = rddParallelReads.collect();
         Assert.assertEquals(serialReads.size(), parallelReads.size());
+    }
+
+    @Test(expectedExceptions = UserException.class, expectedExceptionsMessageRegExp = ".*Failed to read bam header from hdfs://bogus/path.bam.*")
+    public void readsSparkSourceUnknownHostTest() {
+        JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
+        ReadsSparkSource readSource = new ReadsSparkSource(ctx, ReadConstants.DEFAULT_READ_VALIDATION_STRINGENCY);
+        readSource.getParallelReads("hdfs://bogus/path.bam", null);
     }
 
     @Test(dataProvider = "loadReads", groups = "spark")
@@ -104,7 +119,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
 
         List<GATKRead> serialReads = rddSerialReads.collect();
         List<GATKRead> parallelReads = rddParallelReads.collect();
-        Assert.assertEquals(serialReads.size(), parallelReads.size());
+        Assert.assertEquals(parallelReads.size(), serialReads.size());
     }
 
     @Test(groups = "spark")
@@ -128,7 +143,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         doLoadReadsTest(NA12878_chr17_1k_CRAM, null);
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testPartitionSizing(){
 
         String bam = dirBQSR + "HiSeq.1mb.1RG.2k_lines.alternate.bam"; //file is ~220 kB
@@ -141,7 +156,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         Assert.assertEquals(smallPartitions.partitions().size(), 2);
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testReadFromFileAndHDFS() throws Exception {
         final File bam = getTestFile("hdfs_file_test.bam");
         final File bai = getTestFile("hdfs_file_test.bai");
@@ -162,7 +177,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         });
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testCRAMReferenceFromHDFS() throws Exception {
         final File cram = new File(NA12878_chr17_1k_CRAM);
         final File reference = new File(v37_chr17_1Mb_Reference);
@@ -187,13 +202,14 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         });
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testIntervals() throws IOException {
         JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
         ReadsSparkSource readSource = new ReadsSparkSource(ctx);
         List<SimpleInterval> intervals =
                 ImmutableList.of(new SimpleInterval("17", 69010, 69040), new SimpleInterval("17", 69910, 69920));
-        JavaRDD<GATKRead> reads = readSource.getParallelReads(NA12878_chr17_1k_BAM, null, intervals);
+        TraversalParameters traversalParameters = new TraversalParameters(intervals, false);
+        JavaRDD<GATKRead> reads = readSource.getParallelReads(NA12878_chr17_1k_BAM, null, traversalParameters);
 
         SamReaderFactory samReaderFactory = SamReaderFactory.makeDefault().validationStringency(ValidationStringency.SILENT);
         try (SamReader samReader = samReaderFactory.open(new File(NA12878_chr17_1k_BAM))) {
@@ -203,14 +219,34 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
         }
     }
 
+    @Test(groups = "spark")
+    public void testIntervalsWithUnmapped() throws IOException {
+        String bam = publicTestDir + "org/broadinstitute/hellbender/engine/CEUTrio.HiSeq.WGS.b37.NA12878.snippet_with_unmapped.bam";
+        JavaSparkContext ctx = SparkContextFactory.getTestSparkContext();
+        ReadsSparkSource readSource = new ReadsSparkSource(ctx);
+        List<SimpleInterval> intervals = ImmutableList.of(new SimpleInterval("20", 10000009, 10000011));
+        TraversalParameters traversalParameters = new TraversalParameters(intervals, true);
+        JavaRDD<GATKRead> reads = readSource.getParallelReads(bam, null, traversalParameters);
+
+        SamReaderFactory samReaderFactory = SamReaderFactory.makeDefault().validationStringency(ValidationStringency.SILENT);
+        try (SamReader samReader = samReaderFactory.open(new File(bam))) {
+            int seqIndex = samReader.getFileHeader().getSequenceIndex("20");
+            SAMRecordIterator query = samReader.query(new QueryInterval[]{new QueryInterval(seqIndex, 10000009, 10000011)}, false);
+            int queryReads = Iterators.size(query);
+            query.close();
+            SAMRecordIterator queryUnmapped = samReader.queryUnmapped();
+            queryReads += Iterators.size(queryUnmapped);
+            Assert.assertEquals(reads.count(), queryReads);
+        }
+    }
+
     /**
      * Loads Reads using samReaderFactory, then calling ctx.parallelize.
      * @param bam file to load
      * @return RDD of (SAMRecord-backed) GATKReads from the file.
      */
     public JavaRDD<GATKRead> getSerialReads(final JavaSparkContext ctx, final String bam, final String referencePath, final ValidationStringency validationStringency) {
-        final SAMFileHeader readsHeader = new ReadsSparkSource(ctx, validationStringency).getHeader(bam, referencePath, null);
-        List<SimpleInterval> intervals = IntervalUtils.getAllIntervalsForReference(readsHeader.getSequenceDictionary());
+        final SAMFileHeader readsHeader = new ReadsSparkSource(ctx, validationStringency).getHeader(bam, referencePath);
 
         final SamReaderFactory samReaderFactory;
         if (referencePath != null) {
@@ -220,8 +256,7 @@ public class ReadsSparkSourceUnitTest extends BaseTest {
             samReaderFactory = SamReaderFactory.makeDefault().validationStringency(validationStringency);
         }
 
-        ReadsDataSource bam2 = new ReadsDataSource(new File(bam), samReaderFactory);
-        bam2.setTraversalBounds(intervals);
+        ReadsDataSource bam2 = new ReadsDataSource(IOUtils.getPath(bam), samReaderFactory);
         List<GATKRead> records = Lists.newArrayList();
         for ( GATKRead read : bam2 ) {
             records.add(read);

@@ -1,18 +1,18 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
 import htsjdk.samtools.SAMRecord;
-import htsjdk.samtools.util.StringUtil;
+import org.broadinstitute.hellbender.utils.IndexRange;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.*;
 
-public final class AssemblyRegionTestDataSetUnitTest extends BaseTest {
+public final class AssemblyRegionTestDataSetUnitTest extends GATKBaseTest {
 
     @Test(dataProvider="activeRegionTestDataSets")
     @SuppressWarnings("fallthrough")
@@ -103,20 +103,16 @@ public final class AssemblyRegionTestDataSetUnitTest extends BaseTest {
      * @return never null.
      */
     public static AssemblyRegionTestDataSet createAssemblyRegionTestDataSet(final int kmerSize, final int readLength, final String variation, final int readCount, final int regionSize, final byte bq, final byte iq, final byte dq) {
-
         final String reference = REF.substring(0, regionSize);
 
-        final AssemblyRegionTestDataSet result = new AssemblyRegionTestDataSet(kmerSize, reference,
+        return new AssemblyRegionTestDataSet(kmerSize, reference,
                 new String[]{"Civar:" + variation},
                 new String[]{"*:" + readCount + ":" + readLength}, byteRepeat(bq, readLength), byteRepeat(dq, readLength), byteRepeat(iq, readLength));
-
-
-        return result;
     }
 
     @DataProvider(name="activeRegionTestDataSets")
     public Iterator<Object[]> activeRegionTestDataSets() {
-        return new java.util.Iterator<Object[]>() {
+        return new Iterator<Object[]>() {
 
             private int i = 0;
 
@@ -164,10 +160,7 @@ public final class AssemblyRegionTestDataSetUnitTest extends BaseTest {
 
 
     private static int[] intValues(final String[] kmerSizes) {
-        final int[] result = new int[kmerSizes.length];
-        for (int i = 0; i < result.length; i++)
-            result[i] = Integer.parseInt(kmerSizes[i]);
-        return result;
+        return new IndexRange(0, kmerSizes.length).mapToInteger(n -> Integer.parseInt(kmerSizes[n]));
     }
 
     private static final Object[][] ACTIVE_REGION_TEST_DATA_SET_PARAMETERS;
@@ -362,6 +355,6 @@ public final class AssemblyRegionTestDataSetUnitTest extends BaseTest {
                     "CTGGGAGCCTAAGGCATCACTCAAGATACAGGCTCGGTAACGTACGCTCTAGCCATCTAA" +
                     "CTATCCCCTATGTCTTATAGGGACCTACGTTATCTGCCTG";
 
-    protected final static String REF_MD5 = Utils.calcMD5(REF);
+    protected static final String REF_MD5 = Utils.calcMD5(REF);
 
 }

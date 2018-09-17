@@ -5,7 +5,7 @@ import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -13,7 +13,7 @@ import org.testng.annotations.Test;
 import java.util.Arrays;
 import java.util.Iterator;
 
-public class ReadFilteringIteratorUnitTest extends BaseTest {
+public class ReadFilteringIteratorUnitTest extends GATKBaseTest {
 
     private Iterator<GATKRead> makeReadsIterator() {
         return Arrays.asList(
@@ -27,8 +27,12 @@ public class ReadFilteringIteratorUnitTest extends BaseTest {
 
     @DataProvider(name = "FilteringIteratorTestData")
     public Object[][] filteringIteratorTestData() {
-        final ReadFilter allowNoReadsFilter = read -> false;
-        final ReadFilter allowLongReadsFilter = read -> read.getLength() > 100;
+        final ReadFilter allowNoReadsFilter = new ReadFilter() {
+            private static final long serialVersionUID = 1L;
+            @Override public boolean test(final GATKRead read){return false;} };
+        final ReadFilter allowLongReadsFilter = new ReadFilter() {
+            private static final long serialVersionUID = 1L;
+            @Override public boolean test(final GATKRead read){return read.getLength() > 100;} };
 
         return new Object[][] {
                 { makeReadsIterator(), ReadFilterLibrary.ALLOW_ALL_READS, 5 },

@@ -10,7 +10,7 @@ import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadCoordinateComparator;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 
@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
 /**
  * testing of the new (non-legacy) version of LocusIteratorByState
  */
-public abstract class LocusIteratorByStateBaseTest extends BaseTest {
+public abstract class LocusIteratorByStateBaseTest extends GATKBaseTest {
     protected static SAMFileHeader header;
     protected GenomeLocParser genomeLocParser;
 
@@ -44,18 +44,32 @@ public abstract class LocusIteratorByStateBaseTest extends BaseTest {
         return makeLIBS(reads, null, false, header);
     }
 
+    protected LocusIteratorByState makeLIBSwithNs(final List<GATKRead> reads, final SAMFileHeader header) {
+        return makeLIBS(reads, null, true, false, header);
+    }
+
+    protected LocusIteratorByState makeLIBS(final List<GATKRead> reads,
+        final DownsamplingMethod downsamplingMethod,
+        final boolean keepUniqueReadList,
+        final SAMFileHeader header) {
+        return makeLIBS(reads, downsamplingMethod, false, keepUniqueReadList, header);
+    }
+
     protected LocusIteratorByState makeLIBS(final List<GATKRead> reads,
                                             final DownsamplingMethod downsamplingMethod,
+                                            final boolean includeNs,
                                             final boolean keepUniqueReadList,
                                             final SAMFileHeader header) {
         reads.sort(new ReadCoordinateComparator(header));
         return new LocusIteratorByState(
                 new FakeCloseableIterator<>(reads.iterator()),
                 downsamplingMethod,
-                true,
                 keepUniqueReadList,
                 sampleListForSAMWithoutReadGroups(),
-                header);
+                header,
+                true,
+                includeNs
+        );
     }
 
     private boolean isIndel(final CigarElement ce) {

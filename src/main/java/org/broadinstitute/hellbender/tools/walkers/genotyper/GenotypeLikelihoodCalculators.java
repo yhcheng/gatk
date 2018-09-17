@@ -1,5 +1,11 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
+import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.Utils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.util.Arrays;
 
 /**
@@ -11,6 +17,8 @@ import java.util.Arrays;
  * </p>
  */
 public final class GenotypeLikelihoodCalculators {
+
+    private static final Logger logger = LogManager.getLogger(GenotypeLikelihoodCalculators.class);
 
     /**
      * The current maximum ploidy supported by the tables.
@@ -58,6 +66,10 @@ public final class GenotypeLikelihoodCalculators {
      */
     private GenotypeAlleleCounts[][] genotypeTableByPloidy =
             buildGenotypeAlleleCountsTable(maximumPloidy,maximumAllele,alleleFirstGenotypeOffsetByPloidy);
+
+    public GenotypeLikelihoodCalculators(){
+
+    }
 
     /**
      * Build the table with the genotype offsets based on ploidy and the maximum allele index with representation
@@ -222,12 +234,8 @@ public final class GenotypeLikelihoodCalculators {
      * @return never {@code null}, follows the specification above.
      */
     private static GenotypeAlleleCounts[] buildGenotypeAlleleCountsArray(final int ploidy, final int alleleCount, final int[][] genotypeOffsetTable) {
-        if (ploidy < 0) {
-            throw new IllegalArgumentException("the requested ploidy cannot be negative: " + ploidy);
-        }
-        if (alleleCount < 0) {
-            throw new IllegalArgumentException("the requested maximum allele cannot be negative: " + alleleCount);
-        }
+        Utils.validateArg(ploidy >= 0, () -> "the requested ploidy cannot be negative: " + ploidy);
+        Utils.validateArg(alleleCount >= 0, () -> "the requested maximum allele cannot be negative: " + alleleCount);
         final int length = genotypeOffsetTable[ploidy][alleleCount];
         final int strongRefLength = length == GENOTYPE_COUNT_OVERFLOW ? MAXIMUM_STRONG_REF_GENOTYPE_PER_PLOIDY : Math.min(length, MAXIMUM_STRONG_REF_GENOTYPE_PER_PLOIDY);
         final GenotypeAlleleCounts[] result = new GenotypeAlleleCounts[strongRefLength];
@@ -245,19 +253,20 @@ public final class GenotypeLikelihoodCalculators {
      * @param alleleCount the required allele-count.
      * @param ploidy the required ploidy-count.
      *
-     * @throws IllegalArgumentException if either {@code ploidy} or {@code alleleCount} is {@code null}, or
-     *      the resulting number of genotypes is too large.
+     * @throws IllegalArgumentException if either {@code ploidy} or {@code alleleCount} is negative, or the resulting number of genotypes is too large.
      *
      * @return never {@code null}.
      */
     public GenotypeLikelihoodCalculator getInstance(final int ploidy, final int alleleCount) {
         checkPloidyAndMaximumAllele(ploidy, alleleCount);
-        if (alleleCount > maximumAllele || ploidy > maximumPloidy) {
-            ensureCapacity(alleleCount, ploidy);
+
+        if (calculateGenotypeCountUsingTables(ploidy, alleleCount) == GENOTYPE_COUNT_OVERFLOW) {
+            final double largeGenotypeCount = Math.pow(10, MathUtils.log10BinomialCoefficient(ploidy + alleleCount - 1, alleleCount - 1));
+            throw new IllegalArgumentException(String.format("the number of genotypes is too large for ploidy %d and allele %d: approx. %.0f", ploidy, alleleCount, largeGenotypeCount));
         }
 
         // At this point the tables must have at least the requested capacity, likely to be much more.
-        return new GenotypeLikelihoodCalculator(ploidy,alleleCount,alleleFirstGenotypeOffsetByPloidy,genotypeTableByPloidy);
+        return new GenotypeLikelihoodCalculator(ploidy, alleleCount, alleleFirstGenotypeOffsetByPloidy, genotypeTableByPloidy);
     }
 
     /**
@@ -278,6 +287,8 @@ public final class GenotypeLikelihoodCalculators {
 
         final int newMaximumPloidy = Math.max(maximumPloidy, requestedMaximumPloidy);
         final int newMaximumAllele = Math.max(maximumAllele, requestedMaximumAllele);
+
+        logger.debug("Expanding capacity ploidy:" + maximumPloidy + "->" + newMaximumPloidy + " allele:" +  maximumAllele +"->" + newMaximumAllele );
 
         // Update tables first.
         alleleFirstGenotypeOffsetByPloidy = buildAlleleFirstGenotypeOffsetTable(newMaximumPloidy,newMaximumAllele);
@@ -303,26 +314,16 @@ public final class GenotypeLikelihoodCalculators {
      * @throws IllegalArgumentException if either value is negative.
      */
     private static void checkPloidyAndMaximumAllele(final int ploidy, final int maximumAllele) {
-        if (ploidy < 0) {
-            throw new IllegalArgumentException("the ploidy provided cannot be negative: " + ploidy);
-        }
-        if (maximumAllele < 0) {
-            throw new IllegalArgumentException("the maximum allele index provided cannot be negative: " + maximumAllele);
-        }
+        Utils.validateArg(ploidy >= 0, () -> "the ploidy provided cannot be negative: " + ploidy);
+        Utils.validateArg(maximumAllele >= 0, () -> "the maximum allele index provided cannot be negative: " + maximumAllele);
     }
 
     private static void checkOffsetTableCapacity(final int[][] offsetTable, final int maximumPloidy, final int maximumAllele) {
-        if (offsetTable == null) {
-            throw new IllegalArgumentException("the allele first genotype offset table provided cannot be null");
-        }
-        if (offsetTable.length <= maximumPloidy ) {
-            throw new IllegalArgumentException("the allele first genotype offset table provided does not have enough " +
+        Utils.nonNull(offsetTable, "the allele first genotype offset table provided cannot be null");
+        Utils.validateArg(offsetTable.length > maximumPloidy, () -> "the allele first genotype offset table provided does not have enough " +
                     "capacity for requested maximum ploidy: " + maximumPloidy);
-        }
-        if (offsetTable[0].length < maximumAllele) {
-            throw new IllegalArgumentException("the allele first genotype offset table provided does not have enough " +
+        Utils.validateArg(offsetTable[0].length >= maximumAllele, () -> "the allele first genotype offset table provided does not have enough " +
                     "capacity for requested maximum allele index: " + maximumAllele);
-        }
     }
 
 
@@ -331,11 +332,55 @@ public final class GenotypeLikelihoodCalculators {
      * @param ploidy the requested ploidy.
      * @param alleleCount the requested number of alleles.
      *
-     * @throws IllegalArgumentException if {@code ploidy} or {@code alleleCount} is negative.
+     * @throws IllegalArgumentException if {@code ploidy} or {@code alleleCount} is negative or
+     *                                      the number of genotypes is too large (more than {@link Integer#MAX_VALUE}).
      *
-     * @return 0 or greater.
+     * @return the number of genotypes given ploidy and allele count (0 or greater).
      */
     public int genotypeCount(final int ploidy, final int alleleCount) {
+
+        final int result = calculateGenotypeCountUsingTables(ploidy, alleleCount);
+        if (result == GENOTYPE_COUNT_OVERFLOW) {
+            final double largeGenotypeCount = Math.pow(10, MathUtils.log10BinomialCoefficient(ploidy + alleleCount - 1, alleleCount - 1));
+            throw new IllegalArgumentException(String.format("the number of genotypes is too large for ploidy %d and allele %d: approx. %.0f", ploidy, alleleCount, largeGenotypeCount));
+        }
+        return result;
+    }
+
+    /**
+     * Compute the maximally acceptable allele count (ref allele included) given the maximally acceptable genotype count.
+     * @param ploidy            sample ploidy
+     * @param maxGenotypeCount  maximum number of genotype count used to calculate upper bound on number of alleles given ploidy
+     * @throws IllegalArgumentException if {@code ploidy} or {@code alleleCount} is negative.
+     * @return                  the maximally acceptable allele count given ploidy and maximum number of genotypes acceptable
+     */
+    public static int computeMaxAcceptableAlleleCount(final int ploidy, final int maxGenotypeCount){
+
+        checkPloidyAndMaximumAllele(ploidy, ploidy); // a hack to check ploidy makes sense (could duplicate code but choice must be made)
+
+        final double log10MaxGenotypeCount = Math.log10(maxGenotypeCount);
+
+        // Math explanation: genotype count is determined by ${P+A-1 \choose A-1}$, this leads to constraint
+        // $\log(\frac{(P+A-1)!}{(A-1)!}) \le \log(P!G)$,
+        // where $P$ is ploidy, $A$ is allele count, and $G$ is maxGenotypeCount
+        // The upper and lower bounds of the left hand side of the constraint are $P \log(A-1+P)$ and $P \log(A)$
+        // which require $A$ to be searched in interval $[10^{\log(P!G)/P} - (P-1), 10^{\log(P!G)/P}]$
+        // Denote $[10^{\log(P!G)/P}$ as $x$ in the code.
+
+        final double x = Math.pow(10, (MathUtils.log10Factorial(ploidy) + log10MaxGenotypeCount)/ploidy );
+        final int lower = (int)Math.floor(x) - ploidy - 1;
+        final int upper = (int)Math.ceil(x);
+        for(int a=upper; a>=lower; --a){// check one by one
+
+            final double log10GTCnt = MathUtils.log10BinomialCoefficient(ploidy+a-1, a-1);
+            if(log10MaxGenotypeCount >= log10GTCnt) {
+                return a;
+            }
+        }
+        throw new GATKException("Code should never reach here.");
+    }
+
+    private int calculateGenotypeCountUsingTables(int ploidy, int alleleCount) {
         checkPloidyAndMaximumAllele(ploidy, alleleCount);
         if (ploidy > maximumPloidy || alleleCount > maximumAllele) {
             ensureCapacity(alleleCount, ploidy);

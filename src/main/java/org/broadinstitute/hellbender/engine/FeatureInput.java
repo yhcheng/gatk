@@ -2,12 +2,17 @@ package org.broadinstitute.hellbender.engine;
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.tribble.Feature;
-import org.broadinstitute.hellbender.exceptions.UserException;
+import htsjdk.tribble.FeatureCodec;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 
 import java.io.File;
+import java.io.Serializable;
+import java.net.URI;
+import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -34,7 +39,9 @@ import java.util.Map;
  *
  * @param <T> the type of Feature that this FeatureInput file contains (eg., VariantContext, BEDFeature, etc.)
  */
-public final class FeatureInput<T extends Feature> {
+public final class FeatureInput<T extends Feature> implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     /**
      * Logical name for this source of Features optionally provided by the user on the command line
@@ -43,17 +50,17 @@ public final class FeatureInput<T extends Feature> {
      */
     private final String name;
 
-    private final Map<String, String> kevValueMap;
+    private final Map<String, String> keyValueMap;
 
     /**
      * File containing Features as specified by the user on the command line
      */
-    private final File featureFile;
+    private final String featureFile;
 
     /**
-     * Type of Feature in the featureFile. Set manually by the engine after construction.
+     * Cache the codec for this feature input the first time we discover it, so we only do it once
      */
-    private Class<? extends Feature> featureType;
+    private transient Class<FeatureCodec<T, ?>> featureCodecClass;
 
     /**
      * Delimiter between the logical name and the file name in the --argument_name logical_name:feature_file syntax
@@ -78,7 +85,9 @@ public final class FeatureInput<T extends Feature> {
     private static final class ParsedArgument{
         private final Map<String, String> keyValueMap;
         private final String name;
-        private final File file;
+        private final String file;
+        private static final String URI_SCHEME_SEPARATOR = "//";
+        public static final String USAGE = "Argument must either be a file, or of the form logical_name:file or logical_name(,key=value)*:feature_file";
 
         /**
          * Parses an argument value String of the forms:
@@ -93,55 +102,57 @@ public final class FeatureInput<T extends Feature> {
          * @return The argument parsed from the provided string.
          */
         public static ParsedArgument of(final String rawArgumentValue) {
-            final String[] tokens = rawArgumentValue.split(FEATURE_ARGUMENT_TAG_DELIMITER, -1);
-            final String usage = "Argument must either be a file, or of the form logical_name:file or logical_name(,key=value)*:feature_file";
+            //Use negative look ahead to avoid splitting URIs into multiple tokens
+            //i.e. someName:file://somefile -> ["someName", "file://somefile"]
+            final String MATCH_NAME_BUT_NOT_URI_OR_PORT = FEATURE_ARGUMENT_TAG_DELIMITER + "(?!" + URI_SCHEME_SEPARATOR + "|\\d+)";
+            final String[] tokens = rawArgumentValue.split(MATCH_NAME_BUT_NOT_URI_OR_PORT, -1);
 
-            // Check for malformed argument values
-            if (tokens.length > 2 || tokens.length == 0) {
-                throw new UserException.BadArgumentValue("", rawArgumentValue, usage);
-            }
-            for (final String token : tokens) {
-                if (token.isEmpty()) {
-                    throw new UserException.BadArgumentValue("", rawArgumentValue, "Empty name/file encountered. " + usage);
-                }
+            if ( Arrays.stream(tokens).anyMatch(String::isEmpty)) {
+                throw new CommandLineException.BadArgumentValue("", rawArgumentValue, "Empty name/file encountered. " + USAGE);
             }
 
-            if (tokens.length == 1) {
+            if (tokens.length == 0 || tokens.length > 2) {
+                throw new CommandLineException.BadArgumentValue("", rawArgumentValue, USAGE);
+            } else if (tokens.length == 1) {
                 // No user-specified logical name for this FeatureInput, so use the absolute path to the File as its name
-                final File featureFile = new File(tokens[0]);
-                return new ParsedArgument(featureFile.getAbsolutePath(), featureFile);
-            }
-
-            // User specified a logical name (and optional list of key-value pairs)
-            // for this FeatureInput using name(,key=value)*:File syntax.
-            // eg foo:file.vcf
-            // eg foo,a=3,b=false,c=fred:file.vcf
-            final String[] subtokens= tokens[0].split(FEATURE_ARGUMENT_KEY_VALUE_PAIR_DELIMITER, -1);
-            if (subtokens[0].isEmpty()){
-                throw new UserException.BadArgumentValue("", rawArgumentValue, usage);
-            }
-            final ParsedArgument pa= new ParsedArgument(subtokens[0], new File(tokens[1]));
-            //note: starting from 1 because 0 is the name
-            for (int i = 1; i < subtokens.length; i++){
-                final String[] kv = subtokens[i].split(FEATURE_ARGUMENT_KEY_VALUE_SEPARATOR, -1);
-                if (kv.length != 2 || kv[0].isEmpty() || kv[1].isEmpty()){
-                    throw new UserException.BadArgumentValue("", rawArgumentValue, usage);
+                final String featurePath = tokens[0];
+                return new ParsedArgument(getDefaultName(featurePath), featurePath);
+            } else {
+                // User specified a logical name (and optional list of key-value pairs)
+                // for this FeatureInput using name(,key=value)*:File syntax.
+                // eg foo:file.vcf
+                // eg foo,a=3,b=false,c=fred:file.vcf
+                final String[] subtokens= tokens[0].split(FEATURE_ARGUMENT_KEY_VALUE_PAIR_DELIMITER, -1);
+                if (subtokens[0].isEmpty()){
+                    throw new CommandLineException.BadArgumentValue("", rawArgumentValue, USAGE);
                 }
-                if (pa.containsKey(kv[0])){
-                    throw new UserException.BadArgumentValue("", rawArgumentValue, "Duplicate key " + kv[0] + "\n" + usage);
+                final ParsedArgument pa= new ParsedArgument(subtokens[0], tokens[1]);
+                //note: starting from 1 because 0 is the name
+                for (int i = 1; i < subtokens.length; i++){
+                    final String[] kv = subtokens[i].split(FEATURE_ARGUMENT_KEY_VALUE_SEPARATOR, -1);
+                    if (kv.length != 2 || kv[0].isEmpty() || kv[1].isEmpty()){
+                        throw new CommandLineException.BadArgumentValue("", rawArgumentValue, USAGE);
+                    }
+                    if (pa.containsKey(kv[0])){
+                        throw new CommandLineException.BadArgumentValue("", rawArgumentValue, "Duplicate key " + kv[0] + "\n" + USAGE);
+                    }
+                    pa.addKeyValue(kv[0], kv[1]);
                 }
-                pa.addKeyValue(kv[0], kv[1]);
+                return pa;
             }
-            return pa;
         }
 
-        private ParsedArgument(final String name, final File file) {
+        private static String getDefaultName(String featurePath) {
+            return FeatureInput.makeIntoAbsolutePath(featurePath);
+        }
+
+        private ParsedArgument(final String name, final String file) {
             this.name=name;
             this.file=file;
-            this.keyValueMap = new HashMap<>(2);
+            this.keyValueMap = new LinkedHashMap<>(2);
         }
 
-        public File getFile(){
+        public String getFilePath(){
             return file;
         }
 
@@ -172,7 +183,7 @@ public final class FeatureInput<T extends Feature> {
      * Only meant to be called by the argument parsing system, and therefore marked as package-visible --
      * FeatureInputs constructed some other way will not be recognized by the engine.
      *
-     * Note: cannot delegate to another construtor because Java only allows a call to "this" on the first line of a constructor.
+     * Note: cannot delegate to another constructor because Java only allows a call to "this" on the first line of a constructor.
      *
      * @param rawArgumentValue String of the form "logical_name:feature_file" or "feature_file"
      */
@@ -181,9 +192,18 @@ public final class FeatureInput<T extends Feature> {
         final ParsedArgument parsedArgument = ParsedArgument.of(rawArgumentValue);
 
         name = parsedArgument.getName();
-        kevValueMap = parsedArgument.keyValueMap();
-        featureFile = parsedArgument.getFile();
-        featureType = null;  // Must be set after construction
+        keyValueMap = parsedArgument.keyValueMap();
+        this.featureFile = parsedArgument.getFilePath();
+    }
+
+    /**
+     * Construct a FeatureInput from a path and a name
+     *
+     * This constructor is meant to be called only by the engine and test classes,
+     * which is why it has package access.
+     */
+    FeatureInput(final String featurePath, final String name) {
+        this(featurePath, name, Collections.emptyMap());
     }
 
     /**
@@ -193,14 +213,41 @@ public final class FeatureInput<T extends Feature> {
      * FeatureInputs constructed some other way will not be recognized by the engine.
      */
     @VisibleForTesting
-    public FeatureInput(final String name, final Map<String, String> kevValueMap, final File featureFile) {
+    public FeatureInput(final String featureFile, final String name, final Map<String, String> keyValueMap) {
         Utils.nonNull(name, "name");
-        Utils.nonNull(kevValueMap, "kevValueMap");
-        Utils.nonNull(featureFile, "featureFile");
+        Utils.nonNull(keyValueMap, "kevValueMap");
+        Utils.nonNull(featureFile, "feature-file");
         this.name = name;
-        this.kevValueMap = Collections.unmodifiableMap(new HashMap<>(kevValueMap));   //make a unmodifiable copy
+        this.keyValueMap = Collections.unmodifiableMap(new LinkedHashMap<>(keyValueMap));   //make a unmodifiable copy
         this.featureFile = featureFile;
-        this.featureType = null;  // Must be set after construction
+    }
+
+    /**
+     * Remember the FeatureCodec class for this input the first time it is discovered so we can bypass dynamic codec
+     * discovery when multiple FeatureDataSources are created for the same input.
+     */
+    public void setFeatureCodecClass(final Class<FeatureCodec<T, ?>> featureCodecClass) {
+        this.featureCodecClass = featureCodecClass;
+    }
+
+    /**
+     * @return The previously established FeatureCodec class to use for this input, if any. May return {@code null}.
+     */
+    public Class<FeatureCodec<T, ?>> getFeatureCodecClass() {
+        return this.featureCodecClass;
+    }
+
+    /**
+     * creates a name from the given filePath by finding the absolute path of the given input
+     */
+    private static String makeIntoAbsolutePath(final String filePath){
+        if(FeatureDataSource.isGenomicsDBPath(filePath)){
+            return FeatureDataSource.GENOMIC_DB_URI_SCHEME + new File(filePath.replace(FeatureDataSource.GENOMIC_DB_URI_SCHEME,"")).getAbsolutePath();
+        } else if (URI.create(filePath).getScheme() != null) {
+            return IOUtils.getPath(filePath).toAbsolutePath().toUri().toString();
+        } else {
+            return new File(filePath).getAbsolutePath();
+        }
     }
 
     /**
@@ -210,7 +257,7 @@ public final class FeatureInput<T extends Feature> {
      */
     public String getAttribute(final String key) {
         Utils.nonNull(key);
-        return kevValueMap.get(key);
+        return keyValueMap.get(key);
     }
 
     /**
@@ -225,36 +272,26 @@ public final class FeatureInput<T extends Feature> {
     }
 
     /**
+     *
+     * @return true if the value for name does not match the default, indicating it was a user supplied name (i.e. foo:file.vcf)
+     */
+    public boolean hasUserSuppliedName() {
+        return !ParsedArgument.getDefaultName(getFeaturePath()).equals(name);
+    }
+
+    /**
      * Gets the file backing this source of Features
      *
      * @return file backing this source of Features
      */
-    public File getFeatureFile() {
+    public String getFeaturePath() {
         return featureFile;
-    }
-
-    /**
-     * Gets the type of Feature contained in our file
-     *
-     * @return the type of Feature contained in our file
-     */
-    public Class<? extends Feature> getFeatureType() {
-        return featureType;
-    }
-
-    /**
-     * Sets the type of Feature contained in our file. Called by the engine after construction time.
-     *
-     * @param featureType the type of Feature contained in our file
-     */
-    public void setFeatureType(final Class<? extends Feature> featureType) {
-        this.featureType = featureType;
     }
 
     /**
      * FeatureInputs will be hashed by the engine, so make an effort to produce a reasonable hash code
      *
-     * @return hash code for this FeatureInput (combination of hash codec of the name and file)
+     * @return hash code for this FeatureInput (combination of hash code of the name and file)
      */
     @Override
     public int hashCode() {
@@ -286,7 +323,7 @@ public final class FeatureInput<T extends Feature> {
      */
     @Override
     public String toString() {
-        final String featureFilePath = featureFile.getAbsolutePath();
+        final String featureFilePath = makeIntoAbsolutePath(featureFile);
         return name.equals(featureFilePath) ? featureFilePath :
                                               String.format("%s%s%s", name, FEATURE_ARGUMENT_TAG_DELIMITER, featureFilePath);
     }

@@ -7,7 +7,7 @@ import htsjdk.variant.variantcontext.VariantContext.Type;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 
 import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -19,7 +19,7 @@ import java.util.*;
 /**
  * Tests for the various VariantContext variant filter predicates
  */
-public class VariantFilterUnitTest extends BaseTest {
+public class VariantFilterUnitTest extends GATKBaseTest {
 
     final Allele SnpRef = Allele.create("A", true);
     final Allele Snp = Allele.create("T");
@@ -74,7 +74,7 @@ public class VariantFilterUnitTest extends BaseTest {
 
     @Test(dataProvider="includeIDsVCs")
     public void testIncludeIDsVariantFilter(VariantContext vc, String[] incIDs, boolean expected) {
-        Set<String> idSet = new HashSet<>();
+        Set<String> idSet = new LinkedHashSet<>();
         idSet.addAll(Arrays.asList(incIDs));
         VariantIDsVariantFilter iivf = new VariantIDsVariantFilter(idSet);
         Assert.assertTrue(iivf.test(vc) == expected);
@@ -97,7 +97,7 @@ public class VariantFilterUnitTest extends BaseTest {
 
     @Test(dataProvider="typeVCs")
     public void testVariantTypeVariantFilter(VariantContext vc, Type[] types, boolean expected) {
-        Set<Type> typesSet = new HashSet<>();
+        Set<Type> typesSet = new LinkedHashSet<>();
         typesSet.addAll(Arrays.asList(types));
         VariantTypesVariantFilter vtvf = new VariantTypesVariantFilter(typesSet);
         Assert.assertTrue(vtvf.test(vc) == expected);

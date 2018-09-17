@@ -1,15 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper.afcalc;
 
 import com.google.common.annotations.VisibleForTesting;
-import htsjdk.variant.variantcontext.Allele;
-import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.utils.Utils;
-
-import java.util.List;
-
 
 /**
  * Generic interface for calculating the probability of alleles segregating given priors and genotype likelihoods
@@ -31,16 +26,11 @@ public abstract class AFCalculator {
     public AFCalculationResult getLog10PNonRef(final VariantContext vc, final int defaultPloidy, final int maximumAlternativeAlleles, final double[] log10AlleleFrequencyPriors) {
         Utils.nonNull(vc, "VariantContext cannot be null");
         Utils.nonNull(log10AlleleFrequencyPriors, "priors vector cannot be null");
-        if ( vc.getNAlleles() == 1 ) {
-            throw new IllegalArgumentException("VariantContext has only a single reference allele, but getLog10PNonRef requires at least one at all " + vc);
-        }
+        Utils.validateArg( vc.getNAlleles() > 1, () -> "VariantContext has only a single reference allele, but getLog10PNonRef requires at least one alt allele " + vc);
 
         // reset the result, so we can store our new result there
-        final StateTracker stateTracker = getStateTracker(true,maximumAlternativeAlleles);
-
-        final VariantContext vcWorking = reduceScope(vc,defaultPloidy, maximumAlternativeAlleles);
-
-        return computeLog10PNonRef(vcWorking, defaultPloidy, log10AlleleFrequencyPriors, stateTracker);
+        final StateTracker stateTracker = getStateTracker(true, maximumAlternativeAlleles);
+        return computeLog10PNonRef(vc, defaultPloidy, log10AlleleFrequencyPriors, stateTracker);
     }
 
     /**
@@ -48,15 +38,15 @@ public abstract class AFCalculator {
      *
      * Assumes that stateTracker has been updated accordingly
      *
-     * @param vcWorking the VariantContext we actually used as input to the calc model (after reduction)
+     * @param vc the VariantContext used as input to the calc model
      * @param log10AlleleFrequencyPriors the priors by AC vector
      * @return a AFCalculationResult describing the result of this calculation
      */
-    protected AFCalculationResult getResultFromFinalState(final VariantContext vcWorking, final double[] log10AlleleFrequencyPriors, final StateTracker stateTracker) {
-        Utils.nonNull(vcWorking, "vcWorking cannot be null");
+    protected AFCalculationResult getResultFromFinalState(final VariantContext vc, final double[] log10AlleleFrequencyPriors, final StateTracker stateTracker) {
+        Utils.nonNull(vc, "vc cannot be null");
         Utils.nonNull(log10AlleleFrequencyPriors, "log10AlleleFrequencyPriors cannot be null");
 
-        stateTracker.setAllelesUsedInGenotyping(vcWorking.getAlleles());
+        stateTracker.setAllelesUsedInGenotyping(vc.getAlleles());
         return stateTracker.toAFCalculationResult(log10AlleleFrequencyPriors);
     }
 
@@ -66,18 +56,6 @@ public abstract class AFCalculator {
     // to actually calculate the AF
     //
     // ---------------------------------------------------------------------------
-
-    /**
-     * Look at VC and perhaps return a new one of reduced complexity, if that's necessary
-     *
-     * Used before the call to computeLog10PNonRef to simply the calculation job at hand,
-     * if vc exceeds bounds.  For example, if VC has 100 alt alleles this function
-     * may decide to only genotype the best 2 of them.
-     *
-     * @param vc the initial VC provided by the caller to this AFcalculation
-     * @return a potentially simpler VC that's more tractable to genotype
-     */
-    protected abstract VariantContext reduceScope(final VariantContext vc, final int defaultPloidy, final int maximumAlternativeAlleles);
 
     /**
      * Actually carry out the log10PNonRef calculation on vc, storing results in results
@@ -91,22 +69,6 @@ public abstract class AFCalculator {
                                                         final double[] log10AlleleFrequencyPriors, final StateTracker stateTracker);
 
     /**
-     * Subset VC to the just allelesToUse, updating genotype likelihoods
-     *
-     * Must be overridden by concrete subclasses
-     *
-     * @param vc                                variant context with alleles and genotype likelihoods
-     * @param defaultPloidy                     default ploidy to assume in case {@code vc} does not indicate it for a sample.
-     * @param allelesToUse                      alleles to subset
-     * @param assignGenotypes
-     * @return GenotypesContext object
-     */
-    public abstract GenotypesContext subsetAlleles(final VariantContext vc,
-                                                   final int defaultPloidy,
-                                                   final List<Allele> allelesToUse,
-                                                   final boolean assignGenotypes);
-
-    /**
      * Retrieves the state tracker.
      *
      * <p>
@@ -118,7 +80,7 @@ public abstract class AFCalculator {
      * @param maximumAlternativeAlleleCount the maximum alternative allele count it must be able to handle. Has no effect if
      *                                     the current tracker is able to handle that number.
      *
-     * @return never {@code null}
+     * @return {@code null} iff this calculator implementation does not use a state tracker.
      */
     protected StateTracker getStateTracker(final boolean reset, final int maximumAlternativeAlleleCount) {
         if (stateTracker == null) {

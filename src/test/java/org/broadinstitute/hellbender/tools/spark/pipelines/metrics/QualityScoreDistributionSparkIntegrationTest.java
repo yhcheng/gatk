@@ -7,9 +7,9 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.tools.spark.pipelines.metrics.QualityScoreDistributionSpark.Counts;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -27,14 +27,15 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
 
     //Note: we don't test the contents of the chart pdf
 
-    private static final File TEST_DATA_DIR = new File(getTestDataDir(), "picard/analysis/QualityScoreDistribution");
+    private static final File TEST_DATA_DIR = new File(
+            "src/test/resources/org/broadinstitute/hellbender/metrics/analysis//QualityScoreDistribution");
 
     @Override
     public String getTestedClassName() {
         return QualityScoreDistributionSpark.class.getSimpleName();
     }
 
-    @Test
+    @Test(groups = "spark")
     public void testAccumulators() throws Exception {
         final long[] qs= new long[128];
         final long[] oqs= new long[128];
@@ -89,15 +90,15 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
         return list.iterator();
     }
 
-    @Test(dataProvider = "QualityScoreDistribution", groups = {"R"})
+    @Test(dataProvider = "QualityScoreDistribution", groups = {"spark", "R"})
     public void test(final String unsortedBamName, final String expectedFileName, final String referenceName,
                      final boolean makePdf, final boolean pfReadsOnly, final boolean alignedReadsOnly) throws IOException {
         final File unsortedBam = new File(TEST_DATA_DIR, unsortedBamName);
         final File expectedFile = new File(TEST_DATA_DIR, expectedFileName);
 
         //Note we compare to non-spark outputs
-        final File outfile = BaseTest.createTempFile("test", ".metrics");
-        final File pdf = BaseTest.createTempFile("test", ".pdf");
+        final File outfile = GATKBaseTest.createTempFile("test", ".metrics");
+        final File pdf = GATKBaseTest.createTempFile("test", ".pdf");
 
         ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("--" + StandardArgumentDefinitions.INPUT_LONG_NAME);
@@ -121,6 +122,12 @@ public class QualityScoreDistributionSparkIntegrationTest  extends CommandLinePr
         this.runCommandLine(args.getArgsArray());
 
         IntegrationTestSpec.assertEqualTextFiles(outfile, expectedFile, "#");
+    }
+
+    @Test
+    public void testGetRScriptResource() {
+        // Make sure the RScript resource can be resolved
+        Assert.assertNotNull(QualityScoreDistributionSpark.getQualityScoreDistributionRScriptResource());
     }
 
 }

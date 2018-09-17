@@ -1,7 +1,7 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller.graphs;
 
 import com.google.common.base.Strings;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -12,8 +12,8 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
-public final class SeqGraphUnitTest extends BaseTest {
-    private final static boolean DEBUG = false;
+public final class SeqGraphUnitTest extends GATKBaseTest {
+    private static final boolean DEBUG = false;
 
     private class MergeNodesWithNoVariationTestProvider extends TestDataProvider {
         public byte[] sequence;
@@ -70,7 +70,7 @@ public final class SeqGraphUnitTest extends BaseTest {
 
 
     @DataProvider(name = "IsDiamondData")
-    public Object[][] makeIsDiamondData() throws Exception {
+    public Object[][] makeIsDiamondData() {
         List<Object[]> tests = new ArrayList<>();
 
         SeqGraph graph;
@@ -147,7 +147,7 @@ public final class SeqGraphUnitTest extends BaseTest {
     }
 
     @DataProvider(name = "MergingData")
-    public Object[][] makeMergingData() throws Exception {
+    public Object[][] makeMergingData() {
         List<Object[]> tests = new ArrayList<>();
 
         final SeqGraph graph = new SeqGraph(11);
@@ -313,7 +313,7 @@ public final class SeqGraphUnitTest extends BaseTest {
     }
 
     @DataProvider(name = "LinearZipData")
-    public Object[][] makeLinearZipData() throws Exception {
+    public Object[][] makeLinearZipData() {
         List<Object[]> tests = new ArrayList<>();
 
         SeqGraph graph = new SeqGraph(11);

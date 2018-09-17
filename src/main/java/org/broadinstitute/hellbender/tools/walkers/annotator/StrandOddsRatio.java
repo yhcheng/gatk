@@ -1,12 +1,14 @@
 package org.broadinstitute.hellbender.tools.walkers.annotator;
 
 import com.google.common.annotations.VisibleForTesting;
+import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.vcf.VCFInfoHeaderLine;
-import org.broadinstitute.hellbender.utils.genotyper.PerReadAlleleLikelihoodMap;
+import org.broadinstitute.barclay.help.DocumentedFeature;
+import org.broadinstitute.hellbender.utils.genotyper.ReadLikelihoods;
+import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
-import org.broadinstitute.hellbender.utils.variant.GATKVCFHeaderLines;
 
 import java.util.Collections;
 import java.util.List;
@@ -52,6 +54,7 @@ import static java.lang.Math.min;
  * </ul>
  *
  */
+@DocumentedFeature(groupName=HelpConstants.DOC_CAT_ANNOTATORS, groupSummary=HelpConstants.DOC_CAT_ANNOTATORS_SUMMARY, summary="Strand bias estimated by the symmetric odds ratio test (SOR)")
 public final class StrandOddsRatio extends StrandBiasTest implements StandardAnnotation {
 
     private static final double PSEUDOCOUNT = 1.0;
@@ -64,8 +67,17 @@ public final class StrandOddsRatio extends StrandBiasTest implements StandardAnn
     }
 
     @Override
-    protected Map<String, Object> calculateAnnotationFromLikelihoodMap(final Map<String, PerReadAlleleLikelihoodMap> stratifiedPerReadAlleleLikelihoodMap, final VariantContext vc){
-        final int[][] table = getContingencyTable(stratifiedPerReadAlleleLikelihoodMap, vc, MIN_COUNT);
+    protected Map<String, Object> calculateAnnotationFromStratifiedContexts(Map<String, List<PileupElement>> stratifiedContexts,
+                                                                            final VariantContext vc){
+        final int[][] tableNoFiltering = getPileupContingencyTable(stratifiedContexts, vc.getReference(), vc.getAlternateAlleles(), -1, MIN_COUNT);
+        final double ratio = calculateSOR(tableNoFiltering);
+        return annotationForOneTable(ratio);
+    }
+
+
+    @Override
+    protected Map<String, Object> calculateAnnotationFromLikelihoods(final ReadLikelihoods<Allele> likelihoods, final VariantContext vc){
+        final int[][] table = getContingencyTable(likelihoods, vc, MIN_COUNT);
         return annotationForOneTable(calculateSOR(table));
     }
 
@@ -79,8 +91,7 @@ public final class StrandOddsRatio extends StrandBiasTest implements StandardAnn
      * @param table The table before adding pseudocounts
      * @return the SOR annotation value
      */
-    @VisibleForTesting
-    static double calculateSOR(final int[][] table) {
+    public static double calculateSOR(final int[][] table) {
         final double t00 = table[0][0] + PSEUDOCOUNT;
         final double t01 = table[0][1] + PSEUDOCOUNT;
         final double t11 = table[1][1] + PSEUDOCOUNT;
@@ -113,10 +124,5 @@ public final class StrandOddsRatio extends StrandBiasTest implements StandardAnn
     @Override
     public List<String> getKeyNames() {
         return Collections.singletonList(GATKVCFConstants.STRAND_ODDS_RATIO_KEY);
-    }
-
-    @Override
-    public List<VCFInfoHeaderLine> getDescriptions() {
-        return Collections.singletonList(GATKVCFHeaderLines.getInfoLine(getKeyNames().get(0)));
     }
 }

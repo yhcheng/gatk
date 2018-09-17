@@ -6,32 +6,124 @@ import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.SecondaryOrSupplementarySkippingIterator;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.IOUtil;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.barclay.argparser.Advanced;
+import org.broadinstitute.barclay.argparser.CommandLineException;
+import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
+import org.broadinstitute.barclay.argparser.PositionalArguments;
+import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.*;
-import org.broadinstitute.hellbender.cmdline.programgroups.ReadProgramGroup;
+import picard.cmdline.programgroups.DiagnosticsAndQCProgramGroup;
 import org.broadinstitute.hellbender.engine.ProgressMeter;
 import org.broadinstitute.hellbender.exceptions.UserException;
 
-import java.io.File;
+import java.io.*;
+import java.util.ArrayList;
 import java.util.List;
 
+import static org.broadinstitute.hellbender.transformers.BQSRReadTransformer.constructStaticQuantizedMapping;
+
+/**
+ * Compares the base qualities of two SAM/BAM/CRAM files. The reads in the two files must have exactly the same
+ * names and appear in the same order. The two files are each specified without a flag.
+ * The tool summarizes the results in a text file.
+ *
+ * <h3>Usage example</h3>
+ * <pre>
+ * gatk CompareBaseQualities \
+ *   input_1.bam \
+ *   input_2.bam \
+ *   -O diff.txt
+ * </pre>
+ *
+ * <p><b>An example result with identical base qualities between two inputs</b></p>
+ * <pre>
+ * -----------CompareMatrix summary------------
+ * all 10000 quality scores are the same
+ *
+ * ---------CompareMatrix full matrix (non-zero entries) ----------
+ * QRead1	QRead2	diff	count
+ * 40	40	0	10000
+ * -----------CompareMatrix-binned summary------------
+ * all 10000 quality scores are the same
+ *
+ * ---------CompareMatrix-binned full matrix (non-zero entries) ----------
+ * QRead1	QRead2	diff	count
+ * 40	40	0	10000
+ * </pre>
+ *
+ */
+@DocumentedFeature
 @CommandLineProgramProperties(
-        summary = "USAGE: CompareBaseQualities <SAMFile1> <SAMFile2>\n" +
-                "Compares the base qualities of two input SAM/BAM/CRAM files. The files must be sorted exactly the same name.",
-        oneLineSummary = "Compares base qualities of two input SAM/BAM/CRAM files",
-        programGroup = ReadProgramGroup.class
+        summary = "Compares the base qualities of two SAM/BAM/CRAM files. The reads in the two files must have " +
+                "exactly the same names and appear in the same order.",
+        oneLineSummary = "Compares the base qualities of two SAM/BAM/CRAM files",
+        programGroup = DiagnosticsAndQCProgramGroup.class
 )
 public final class CompareBaseQualities extends PicardCommandLineProgram {
     @PositionalArguments(minElements = 2, maxElements = 2)
     public List<File> samFiles;
 
-    @Argument(doc="summary output file", shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, optional = true)
+    public static final String THROW_ON_DIFF_LONG_NAME = "throw-on-diff";
+
+    public static final String STATIC_QUANTIZED_QUALS_LONG_NAME = "static-quantized-quals";
+
+    public static final String ROUND_DOWN_QUANTIZED_LONG_NAME = "round-down-quantized";
+
+    @Argument(
+            doc = "Summary output file.",
+            shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
+            fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME,
+            optional = true
+    )
     protected String outputFilename = null;
 
-    @Argument(doc="throw error on diff", shortName = "cd", fullName = "throwOnDiff", optional = true)
+    @Argument(
+            doc = "Throw exception on difference.",
+            fullName = THROW_ON_DIFF_LONG_NAME,
+            optional = true
+    )
     protected boolean throwOnDiff = false;
+
+    /**
+     * Return value is 0 if the two files have identical base qualities and non-zero otherwise.
+     * Use static quantized quality scores to a given number of levels.
+     */
+    @Advanced
+    @Argument(
+            doc = "Use static quantized quality scores to a given number of levels " +
+                    "(with --" + StandardArgumentDefinitions.BQSR_TABLE_LONG_NAME+ ")",
+            fullName = STATIC_QUANTIZED_QUALS_LONG_NAME,
+            optional = true
+    )
+    public List<Integer> staticQuantizationQuals = new ArrayList<>();
+
+    /**
+     * Round down quantized only works with the {@link #STATIC_QUANTIZED_QUALS_LONG_NAME} option.  If enabled,
+     * rounding is done in probability space to the nearest bin.  Otherwise, the value is rounded to the
+     * nearest bin that is smaller than the current bin.
+     *
+     * Note: this option only works when {@link #STATIC_QUANTIZED_QUALS_LONG_NAME} is set.
+     */
+    @Advanced
+    @Argument(
+            doc = "Round down quality scores to nearest quantized value.",
+            fullName = ROUND_DOWN_QUANTIZED_LONG_NAME,
+            optional = true
+    )
+    public boolean roundDown = false;
+
+    private byte[] staticQuantizedMapping;
 
     @Override
     protected Object doWork() {
+        if (roundDown && (staticQuantizationQuals == null || staticQuantizationQuals.isEmpty())){
+            throw new CommandLineException.BadArgumentValue(
+                    ROUND_DOWN_QUANTIZED_LONG_NAME, "true",
+                    "This option can only be used if " + STATIC_QUANTIZED_QUALS_LONG_NAME + " is also used.");
+        }
+        staticQuantizedMapping = constructStaticQuantizedMapping(staticQuantizationQuals, roundDown);
+
         IOUtil.assertFileIsReadable(samFiles.get(0));
         IOUtil.assertFileIsReadable(samFiles.get(1));
 
@@ -39,10 +131,12 @@ public final class CompareBaseQualities extends PicardCommandLineProgram {
         final SamReader reader1 = factory.referenceSequence(REFERENCE_SEQUENCE).open(samFiles.get(0));
         final SamReader reader2 = factory.referenceSequence(REFERENCE_SEQUENCE).open(samFiles.get(1));
 
-        final SecondaryOrSupplementarySkippingIterator it1 = new SecondaryOrSupplementarySkippingIterator(reader1.iterator());
-        final SecondaryOrSupplementarySkippingIterator it2 = new SecondaryOrSupplementarySkippingIterator(reader2.iterator());
+        final SecondaryOrSupplementarySkippingIterator it1 =
+                new SecondaryOrSupplementarySkippingIterator(reader1.iterator());
+        final SecondaryOrSupplementarySkippingIterator it2 =
+                new SecondaryOrSupplementarySkippingIterator(reader2.iterator());
 
-        final CompareMatrix finalMatrix = new CompareMatrix();
+        final CompareMatrix finalMatrix = new CompareMatrix(staticQuantizedMapping);
 
         final ProgressMeter progressMeter = new ProgressMeter(1.0);
         progressMeter.start();
@@ -54,11 +148,11 @@ public final class CompareBaseQualities extends PicardCommandLineProgram {
             progressMeter.update(read1);
 
             if (!read1.getReadName().equals(read2.getReadName())){
-                throw new UserException.BadInput("files do not have the same exact order of reads:" + read1.getReadName() + " vs " + read2.getReadName());
+                throw new UserException.BadInput("files do not have the same exact order of reads:" +
+                        read1.getReadName() + " vs " + read2.getReadName());
             }
 
             finalMatrix.add(read1.getBaseQualities(), read2.getBaseQualities());
-
             it1.advance();
             it2.advance();
         }
@@ -70,13 +164,12 @@ public final class CompareBaseQualities extends PicardCommandLineProgram {
         CloserUtil.close(reader1);
         CloserUtil.close(reader2);
 
-        finalMatrix.printOutput(outputFilename);
+        finalMatrix.printOutResults(outputFilename);
 
         if (throwOnDiff && finalMatrix.hasNonDiagonalElements()) {
             throw new UserException("Quality scores from the two BAMs do not match");
         }
 
-        return 0;
+        return finalMatrix.hasNonDiagonalElements() ? 1 : 0;
     }
-
 }

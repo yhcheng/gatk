@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.utils.read.mergealignment;
 import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SAMUtils;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -23,6 +24,7 @@ public final class BestEndMapqPrimaryAlignmentStrategy implements PrimaryAlignme
     /**
      * Primary alignment was filtered out.  Need to select a new one.
      */
+    @Override
     public void pickPrimaryAlignment(final HitsForInsert hits) {
 
         if (hits.numHits() == 0) throw new IllegalArgumentException("No alignments to pick from");
@@ -65,7 +67,10 @@ public final class BestEndMapqPrimaryAlignmentStrategy implements PrimaryAlignme
     }
 
     // Sorts in descending order, but 255 is considered > 0 but < 1, and unmapped is worst of all
-    private static class MapqComparator implements Comparator<SAMRecord> {
+    private static class MapqComparator implements Comparator<SAMRecord>, Serializable {
+        private static final long serialVersionUID = 6763153425070516820L;
+
+        @Override
         public int compare(final SAMRecord rec1, final SAMRecord rec2) {
             if (rec1.getReadUnmappedFlag()) {
                 if (rec2.getReadUnmappedFlag()) return 0;

@@ -66,7 +66,7 @@ public final class GATKReportColumn {
      * @return true if the value is a right alignable
      */
     protected static boolean isRightAlign(final String value) {
-        return value == null || RIGHT_ALIGN_STRINGS.contains(value) || NumberUtils.isNumber(value.trim());
+        return value == null || RIGHT_ALIGN_STRINGS.contains(value) || NumberUtils.isCreatable(value.trim());
     }
 
     /**
@@ -104,7 +104,7 @@ public final class GATKReportColumn {
     public void updateFormatting(final Object value) {
         if (value != null) {
             final String formatted = formatValue(value);
-            if ( formatted.length() > 0 ) {
+            if (!formatted.isEmpty()) {
                 updateMaxWidth(formatted);
                 updateFormat(formatted);
             }

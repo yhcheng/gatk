@@ -1,6 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller.graphs;
 
-import org.broadinstitute.hellbender.utils.test.BaseTest;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -8,12 +8,12 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.util.*;
 
-public final class BaseGraphUnitTest extends BaseTest {
+public final class BaseGraphUnitTest extends GATKBaseTest {
     SeqGraph graph;
     SeqVertex v1, v2, v3, v4, v5;
 
     @BeforeMethod
-    public void setUp() throws Exception {
+    public void setUp() {
         graph = new SeqGraph(11);
 
         v1 = new SeqVertex("A");
