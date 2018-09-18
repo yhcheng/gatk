@@ -3,6 +3,9 @@ package org.broadinstitute.hellbender.utils.pairhmm;
 import com.intel.gkl.pairhmm.IntelPairHmm;
 import com.intel.gkl.pairhmm.IntelPairHmmOMP;
 import com.intel.gkl.pairhmm.IntelPairHmmFpga;
+
+import com.github.yhcheng.ppc64native.pairhmm.PPC64PairHmm;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.gatk.nativebindings.pairhmm.HaplotypeDataHolder;
@@ -39,7 +42,12 @@ public final class VectorLoglessPairHMM extends LoglessPairHMM {
         /**
          * FPGA-accelerated version of PairHMM
          */
-        FPGA
+        FPGA,
+ 	/**
+ 	 * SIMD accelerated PairHMM on PPC64 platforms
+ 	 */
+ 	VSX
+
     }
 
     private static final Logger logger = LogManager.getLogger(VectorLoglessPairHMM.class);
@@ -86,8 +94,15 @@ public final class VectorLoglessPairHMM extends LoglessPairHMM {
                     throw new UserException.HardwareFeatureException("Machine does not support FPGA PairHMM.");
                 }
                 break;
+            case VSX:
+                pairHmm = new PPC64PairHmm();
+                isSupported = pairHmm.load(null);
+                if (!isSupported) {
+                    throw new UserException.HardwareFeatureException("Machine does not support VSX PairHmm");
+                }
+                break;
 
-            default:
+	   default:
                 throw new UserException.HardwareFeatureException("Unknown PairHMM implementation.");
         }
 

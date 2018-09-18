@@ -65,7 +65,13 @@ public abstract class PairHMM implements Closeable{
             logger.info("Using the OpenMP multi-threaded AVX-accelerated native PairHMM implementation");
             return hmm;
         }),
-        /* FPGA implementation of LOGLESS_CACHING called through JNI. Throws if FPGA is not available */
+        /* VSX implementation of LOGLESS_CACHING called through JNI. Works on PPC64 platforms only. Throws if VSX is not available */
+        VSX_LOGLESS_CACHING(args -> {
+            final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.VSX, args);
+            logger.info("Using the multi-threaded VSX-accelerated native PairHMM implementation");
+            return hmm;
+        }),
+	/* FPGA implementation of LOGLESS_CACHING called through JNI. Throws if FPGA is not available */
         EXPERIMENTAL_FPGA_LOGLESS_CACHING(args -> {
             // Constructor will throw a UserException if FPGA is not available
             final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.FPGA, args);
@@ -101,6 +107,14 @@ public abstract class PairHMM implements Closeable{
             try {
                 final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.AVX, args);
                 logger.info("Using the AVX-accelerated native PairHMM implementation");
+                return hmm;
+            }
+            catch ( UserException.HardwareFeatureException e ) {
+                logger.info("AVX-accelerated native PairHMM implementation is not supported");
+            }
+            try {
+                final VectorLoglessPairHMM hmm = new VectorLoglessPairHMM(VectorLoglessPairHMM.Implementation.VSX, args);
+                logger.info("Using the VSX-accelerated native PairHMM implementation");
                 return hmm;
             }
             catch ( UserException.HardwareFeatureException e ) {

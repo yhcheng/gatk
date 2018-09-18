@@ -52,6 +52,14 @@ public interface SmithWatermanAligner extends Closeable {
                 return aligner;
             } catch (UserException.HardwareFeatureException exception) {
                 logger.info("AVX accelerated SmithWaterman implementation is not supported, falling back to the Java implementation");
+            }
+            try {
+                logger.info("try to use VSX SW");
+                final SmithWatermanPPC64Aligner aligner = new SmithWatermanPPC64Aligner();
+                logger.info("Using VSX accelerated SmithWaterman implementation");
+                return aligner;
+	    } catch (UserException.HardwareFeatureException exception) {
+                logger.info("AVX accelerated SmithWaterman implementation is not supported, falling back to the Java implementation");
                 return SmithWatermanJavaAligner.getInstance();
             }
         }),
